@@ -1,4 +1,4 @@
-(ns anglican
+(ns anglican.anglican
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
             [fastmath.stats :as stats]
