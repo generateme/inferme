@@ -109,3 +109,11 @@
                      (b/add-label :left "autocorrelation"))
       (plot/show)))
 
+(defn bar
+  [d]
+  (-> (plot/xy-chart {:width 500 :height 500}
+                     (b/series [:grid]
+                               [:stack-vertical [:bar d]])
+                     (b/add-axes :bottom)
+                     (b/add-axes :left))
+      (plot/show)))

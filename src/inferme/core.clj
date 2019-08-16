@@ -10,6 +10,7 @@
 (defrecord ModelResult [ll result ^double LL])
 
 (defmacro model-result
+  "Result creator returned by model consisting list of log likelihoods and optional model value."
   ([ll result]
    `(->ModelResult ~ll ~result 0.0))
   ([ll]
@@ -18,6 +19,7 @@
    `(->ModelResult nil nil 0.0)))
 
 (defmacro trace-result
+  "Result creator returned by model consisting only model value. Log likelihood is set to `nil` (everything is probable)"
   ([result]
    `(->ModelResult nil ~result 0.0))
   ([]
@@ -29,7 +31,7 @@
     (reduced ##-Inf)
     (+ state ll)))
 
-(defn log-likelihood-sum
+(defn log-likelihood-sum 
   ^double [^ModelResult result]
   (reduce safe-sum 0.0 (.ll result)))
 
@@ -45,7 +47,8 @@
 (def ^:private is-discrete? (memoize (fn [nm] (not (r/continuous? (r/distribution nm))))))
 (def ^:private is-multidimensional? (memoize (fn [nm] (satisfies? r/MultivariateDistributionProto (r/distribution nm)))))
 
-(defmacro make-model 
+(defmacro make-model
+  "Create model."
   [priors & r]
   (assert (vector? priors) "Priors should be a vector!")
   (assert (even? (count priors)) "Odd number of elements in priors.")
@@ -82,6 +85,7 @@
                                      llsum#)))))})))
 
 (defmacro defmodel
+  "Create and define model."
   [nm priors & r]
   `(def ~nm (make-model ~priors ~@r)))
 
@@ -160,12 +164,13 @@
   (if (and steps (== (count steps) (count priors)))
     (vec steps)
     (mapv #(if (satisfies? r/MultivariateDistributionProto %)
-             (let [vs (map-indexed (fn [id r] (m/sqrt (get r id))) (r/covariance %))]
+             (let [vs (map-indexed (fn [id r] (m/sqrt (nth r id))) (r/covariance %))]
                (mapv (fn [^double v] (* step-scale v)) vs))
              (let [v (r/variance %)]
                (* step-scale ^double (if (m/valid-double? v)
                                        (m/sqrt v)
                                        (stddev-without-outliers (r/->seq % 5000)))))) priors)))
+
 (defn gaussian-next-step-fn
   [steps]
   (let [fns (mapv (fn [step]
@@ -253,11 +258,14 @@
   `(r/log-likelihood ~distr ~data))
 
 (defmacro call
-  ([model] `((:model ~model)))
+  ([model] `((:model ~model) (:model ~model)))
   ([model parameters]
    `(let [^ModelResult mr# ((:model ~model) ~parameters)]
       (assoc (.result mr#)
              :LL (:LL mr#)))))
+
+(defmacro random-priors
+  [model] `((:model ~model)))
 
 (defmacro find-initial-point
   ([model inference-result]
@@ -283,10 +291,14 @@
 (as-distribution :categorical-distribution)
 
 (defn trace
-  [inferred selector]
-  (map #(% selector) (:accepted inferred)))
+  ([inferred]
+   (trace inferred :model-result))
+  ([inferred selector]
+   (map #(% selector) (:accepted inferred))))
 
 (defn traces
   [inferred & r]
   (map (apply juxt (map #(fn [v]
                            (v %)) r)) (:accepted inferred)))
+
+

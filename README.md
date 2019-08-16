@@ -2,7 +2,7 @@
 
 Yet another Bayesian inference library for Clojure
 
-## Assumptions
+## What's inside
 
 * Easy to use MCMC based framework
 * Common PPL pattern: generative model -> inference...
@@ -11,7 +11,7 @@ Yet another Bayesian inference library for Clojure
 * Easy to extend
 * Available visualizations
 
-Influenced by LaplacesDemonR and BayesianTools. Also Anglican, MetaProb and WebPPL.
+Influenced by LaplacesDemonR and BayesianTools. Also Anglican and WebPPL.
 
 ## Model
 
@@ -95,3 +95,7 @@ Distributions are backed by `fastmath` library.
 ## Visualizations
 
 [TODO]
+
+## Examples
+
+Check notebooks folder for rework of ProMods book and some Agnlican examples
