@@ -86,7 +86,9 @@
                    :bag3 (colors (r/sample (make-bag :bag3)))
                    :bagN (colors (r/sample (make-bag :bagN)))})))
 
-(def predictives (infer :metropolis-hastings predictives-model {:samples 20000}))
+(def predictives (infer :metropolis-hastings predictives-model {:samples 20000
+                                                                :thin 3
+                                                                :step-scale 0.2}))
 
 (:acceptance-ratio predictives)
 
@@ -179,7 +181,7 @@
                                    {:data colors-range
                                     :probabilities (r/sample dirichlet)})))] 
     (model-result (map (fn [datum]
-                         (observe1 (make-bag (:bag datum)) (colors-map (:draw datum)))) observed-data2)
+                         (observe1 (make-bag (:bag datum)) (colors-map (:draw datum)))) observed-data)
                   {:bag1 (colors (r/sample (make-bag :bag1)))
                    :bag2 (colors (r/sample (make-bag :bag2)))
                    :bag3 (colors (r/sample (make-bag :bag3)))
@@ -275,7 +277,7 @@
                                                                     :thin 10
                                                                     :burn 0
                                                                     ;; :initial-point initial
-                                                                    :steps (gen-steps 0.008 0.008)}))
+                                                                    :steps (gen-steps 0.01 0.7)}))
 
 
 (count (distinct (:accepted category-posterior)))

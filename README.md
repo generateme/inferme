@@ -53,7 +53,7 @@ To create a model you have to use `defmodel` or `make-model` macros. Here is the
 
 Currently 3 inference algorithms are implemented:
 
-* `:forward-sampling` - every result with positive probability is traced, input parameters are randomly sampled from priors (if available)
+* `:forward-sampling` - every result with positive probability is traced, input parameters are randomly sampled from priors (if available). This method is good to generate samples from generative model.
 * `:rejection-sampling` - every result with probability proportional to returned likelihood is traced, input parameters are randomly sampled from priors (if available)
 * `:metropolis-hastings` - MCMC
 

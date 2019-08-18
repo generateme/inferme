@@ -92,10 +92,10 @@
                               ^double (observe1 (distr :normal {:mu (:ymean mus) :sd 0.01}) y)))) observed-data)
                   {:model-result (cat-to-mean (obs-to-cat :new-obs))})))
 
-(def post (infer :metropolis-hastings predictives-model {:step-scale 0.15
+(def post (infer :metropolis-hastings predictives-model {:step-scale 0.1
                                                          :max-iters 1e7
                                                          :thin 100
-                                                         :samples 200}))
+                                                         :samples 500}))
 
 (:acceptance-ratio post)
 

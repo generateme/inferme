@@ -1,6 +1,7 @@
 (ns inferme.core
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
+            [fastmath.vector :as v]
             [fastmath.stats :as stats]))
 
 (set! *warn-on-reflection* true)
@@ -52,7 +53,7 @@
   [priors & r]
   (assert (vector? priors) "Priors should be a vector!")
   (assert (even? (count priors)) "Odd number of elements in priors.")
-  (let [symbols (take-nth 2 priors) 
+  (let [symbols (take-nth 2 priors)
         ks (map keyword symbols)
         distr (map #(if (keyword? (first %))
                       (conj % 'r/distribution)
@@ -60,7 +61,7 @@
         params (with-meta (symbol "params") {:tag 'clojure.lang.PersistentVector})
         priords (symbol "prior-distributions")
         priorns (symbol "prior-names")
-        parameters-map (symbol "parameters-map")] 
+        parameters-map (symbol "parameters-map")]
     `(let [~priords (list ~@distr)
            ~priorns (list ~@ks)]
        {:parameter-names ~priorns
@@ -88,6 +89,8 @@
   "Create and define model."
   [nm priors & r]
   `(def ~nm (make-model ~priors ~@r)))
+
+;;;;;;;;;;;
 
 (defmulti infer (fn [k & r] k))
 
@@ -164,21 +167,28 @@
   (if (and steps (== (count steps) (count priors)))
     (vec steps)
     (mapv #(if (satisfies? r/MultivariateDistributionProto %)
-             (let [vs (map-indexed (fn [id r] (m/sqrt (nth r id))) (r/covariance %))]
+             (let [vs (map-indexed (fn [id r] (m/sqrt (nth r id))) (r/covariance %))] 
                (mapv (fn [^double v] (* step-scale v)) vs))
              (let [v (r/variance %)]
                (* step-scale ^double (if (m/valid-double? v)
                                        (m/sqrt v)
                                        (stddev-without-outliers (r/->seq % 5000)))))) priors)))
 
+;; huh, dirichlet is tricky as hell, sum of proposals for dirichlet should be equal 1.0
+
 (defn gaussian-next-step-fn
-  [steps]
-  (let [fns (mapv (fn [step]
-                    (if (vector? step)
-                      (fn [means]
-                        (mapv #(r/grand %1 %2) means step))
-                      (fn [mean]
-                        (r/grand mean step)))) steps)]
+  [steps priors]
+  (let [fns (mapv (fn [step prior]
+                    (cond
+                      (= :dirichlet (r/distr-id prior)) (let [cnt (dec (count step))]
+                                                          (fn [means]
+                                                            (let [v (mapv #(r/grand %1 %2) (take cnt means) step)
+                                                                  ^double s (reduce m/fast+ 0.0 v)]
+                                                              (conj v (- 1.0 s)))))
+                      (vector? step) (fn [means]
+                                       (mapv #(r/grand %1 %2) means step))
+                      :else (fn [mean]
+                              (r/grand mean step)))) steps priors)]
     (fn [params]
       (mapv #(%1 %2) fns params))))
 
@@ -193,7 +203,7 @@
          accepted (transient [])
          [init-params init-lp init-result] (initial-point-calc initial-point model prior-distributions parameter-names)
          step-vals (gaussian-step-calc steps step-scale prior-distributions)
-         step-fn (gaussian-next-step-fn step-vals)]
+         step-fn (gaussian-next-step-fn step-vals prior-distributions)]
      (loop [iter (long 0)
             accepted-cnt (long 0)
             out-of-prior (long 0)
@@ -300,5 +310,3 @@
   [inferred & r]
   (map (apply juxt (map #(fn [v]
                            (v %)) r)) (:accepted inferred)))
-
-
