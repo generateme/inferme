@@ -26,6 +26,7 @@
                 {:p-delta (- p-a p-b)}))
 
 (def posterior (time (infer :metropolis-hastings ab-test {:samples 20000 :burn 1000 :thin 10 :step-scale 0.08})))
+(def posterior (time (infer :metropolis-within-gibbs ab-test {:samples 10000 :burn 1000 :thin 2 :step-scale 0.04})))
 
 (:acceptance-ratio posterior)
 

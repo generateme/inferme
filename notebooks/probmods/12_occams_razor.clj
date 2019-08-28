@@ -26,6 +26,8 @@
 
 (def post (infer :rejection-sampling model {:samples 1000}))
 
+;; 1.0 - big
+;; 0.0 - small
 (plot/frequencies (trace post :hypothesis))
 
 (def full-data [:a :b :a :b :b :a :b])
@@ -54,11 +56,15 @@
 (def observed-data [:a :b :a :b :c :d :b :b])
 
 (defmodel model
-  [hypothesis (distr :bernoulli)]
+  [hypothesis (:bernoulli)]
   (model-result [(observe (if (== 1.0 hypothesis) A B) observed-data)]))
 
-(def posterior (infer :rejection-sampling model))
+(def posterior (infer :metropolis-hastings model {:step-scale 1.5}))
 
+(:acceptance-ratio posterior)
+
+;; 1.0 - A
+;; 0.0 - B
 (plot/frequencies (trace posterior :hypothesis))
 
 ;; Example: Fair or unfair coin?

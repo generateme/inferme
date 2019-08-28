@@ -86,20 +86,24 @@
   [cat-mixture (:dirichlet {:alpha [1 1]})]
   (let [obs-to-cat (memoize (fn [obs-name] (randval (first cat-mixture) :cat1 :cat2)))
         cat-to-mean (memoize (fn [cat] {:xmean (r/grand) :ymean (r/grand)}))]
-    (model-result (map (fn [{:keys [x y name]}]
-                         (let [mus (cat-to-mean (obs-to-cat name))]
-                           (+ ^double (observe1 (distr :normal {:mu (:xmean mus) :sd 0.01}) x)
-                              ^double (observe1 (distr :normal {:mu (:ymean mus) :sd 0.01}) y)))) observed-data)
+    (model-result (mapcat (fn [{:keys [x y name]}]
+                            (let [mus (cat-to-mean (obs-to-cat name))]
+                              [(observe1 (distr :normal {:mu (:xmean mus) :sd 0.01}) x)
+                               (observe1 (distr :normal {:mu (:ymean mus) :sd 0.01}) y)])) observed-data)
                   {:model-result (cat-to-mean (obs-to-cat :new-obs))})))
 
-(def post (infer :metropolis-hastings predictives-model {:step-scale 0.1
+(def post (infer :metropolis-hastings predictives-model {:steps [0.09]
                                                          :max-iters 1e7
                                                          :thin 100
                                                          :samples 500}))
 
 (:acceptance-ratio post)
+(count (distinct (trace post)))
+(:out-of-prior post)
+(:steps post)
 
-(plot/scatter (map (juxt :xmean :ymean) (trace post)))
+(plot/scatter (map #(v/add % [(r/grand 0.03) (r/grand 0.03)]) ;; jitter a little bit
+                   (map (juxt :xmean :ymean) (trace post))))
 
 (plot/histogram (map first (trace post :cat-mixture)))
 
@@ -204,11 +208,13 @@
 (residuals [0.2, 0.3, 0.1, 0.4])
 ;; => (0.2 0.37499999999999994 0.2 1.0)
 
-(def probs (sample (distr :dirichlet {:alpha [1 1 1 1]})))
-
 (defn my-sample-discrete
   [resid ^long i]
   (randval (nth resid i 0) i (my-sample-discrete resid (inc i))))
+
+(plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals [0.2 0.3 0.1 0.4]) 0)))
+
+(def probs (sample (distr :dirichlet {:alpha [1 1 1 1]})))
 
 (plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals probs) 0)))
 

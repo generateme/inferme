@@ -64,7 +64,7 @@
   [d]
   (-> (plot/xy-chart {:width 500 :height 500}
                      (b/series [:grid]
-                               [:scatter d {:size 10}])
+                               [:scatter d {:size 10 :jitter 0.1}])
                      (b/add-axes :bottom)
                      (b/add-axes :left))
       (plot/show)))

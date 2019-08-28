@@ -2,88 +2,144 @@
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
             [fastmath.vector :as v]
-            [fastmath.stats :as stats]))
+            [fastmath.stats :as stats]
+            [inferme.jump :as jump]
+            [inferme.utils :as utils]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
 (m/use-primitive-operators)
 
-(defrecord ModelResult [ll result ^double LL])
+(deftype ModelResult [ll result])
+(deftype ModelResultFinal [^double ll ^double lp ^clojure.lang.PersistentVector params result])
 
 (defmacro model-result
   "Result creator returned by model consisting list of log likelihoods and optional model value."
   ([ll result]
-   `(->ModelResult ~ll ~result 0.0))
+   `(ModelResult. ~ll ~result))
   ([ll]
-   `(->ModelResult ~ll nil 0.0))
+   `(ModelResult. ~ll nil))
   ([]
-   `(->ModelResult nil nil 0.0)))
+   `(ModelResult. nil nil)))
 
 (defmacro trace-result
   "Result creator returned by model consisting only model value. Log likelihood is set to `nil` (everything is probable)"
   ([result]
-   `(->ModelResult nil ~result 0.0))
+   `(ModelResult. nil ~result))
   ([]
-   `(->ModelResult nil nil 0.0)))
+   `(ModelResult. nil nil)))
 
-(defn- safe-sum
+(defn safe-sum
   [^double state ^double ll]
   (if (m/invalid-double? ll)
     (reduced ##-Inf)
     (+ state ll)))
 
-(defn log-likelihood-sum 
-  ^double [^ModelResult result]
-  (reduce safe-sum 0.0 (.ll result)))
+;;
 
-(defn prior-sum
-  ^double [params priors]
-  (reduce safe-sum 0.0 (mapv #(r/lpdf %1 %2) priors params)))
+(defn- ^:private multidimensional? [d] (satisfies? r/MultivariateDistributionProto d))
 
-(defn unnormalized-posterior-sum
-  ^double [result params priors]
-  (+ (log-likelihood-sum result)
-     (prior-sum params priors)))
+(defn- emit-subsum-dirichlet
+  [model-input ^long id ^long param-cnt]
+  `(- 1.0 ~@(map (fn [^long lid]
+                   `(double (.nth ~model-input ~(+ lid id)))) (range param-cnt))))
 
-(def ^:private is-discrete? (memoize (fn [nm] (not (r/continuous? (r/distribution nm))))))
-(def ^:private is-multidimensional? (memoize (fn [nm] (satisfies? r/MultivariateDistributionProto (r/distribution nm)))))
+(defn- emit-let 
+  [ppriors model-input]
+  (first
+   (reduce (fn [[buff ^int id] {:keys [distr-id multidimensional? continuous? ^int dimensions prior-param-symbol ^int param-cnt]}]
+             (let [symbols
+                   (cond
+                     (and multidimensional?
+                          (= :dirichlet distr-id)) [prior-param-symbol `(conj (subvec ~model-input ~id ~(+ id param-cnt))
+                                                                              ~(emit-subsum-dirichlet model-input id param-cnt))]
+                     multidimensional? [prior-param-symbol `(subvec ~model-input ~id ~(+ id param-cnt))]
+                     (not continuous?) [prior-param-symbol `(m/floor (.nth ~model-input ~id))]
+                     :else [prior-param-symbol `(double (.nth ~model-input ~id))])]
+               [(concat buff symbols) (+ id param-cnt)]))
+           [[] (int 0)] ppriors)))
+
+(defn- emit-sampling-priors
+  [ppriors]
+  (let [lst (map (fn [{:keys [distr-id prior-distr-symbol ^int dimensions]}]
+                   (if (= distr-id :dirichlet)
+                     `(subvec (r/sample ~prior-distr-symbol) 0 ~(dec dimensions))
+                     `(r/sample ~prior-distr-symbol))) ppriors)]
+    (if (some :multidimensional? ppriors)
+      `(vec (flatten [~@lst]))
+      `[~@lst])))
+
+(defn- preprocess-prior
+  [[p d]]
+  (let [[fixed safe-eval?] (if (and (list? d)
+                                    (keyword? (first d)))
+                             [(conj d 'r/distribution) false]
+                             [d true]) 
+        dstr (eval (if (or safe-eval?
+                           (not (map? (last fixed)))) fixed (butlast fixed)))
+        multi? (multidimensional? dstr)
+        ^int dims (if (and multi? (not safe-eval?) (map? (last fixed)))
+                    (if-let [ds (:dimensions (last fixed))]
+                      ds
+                      (r/dimensions (eval fixed)))
+                    (r/dimensions dstr))
+        distr-id (r/distr-id dstr)]
+    {:distr-id distr-id
+     :continuous? (r/continuous? dstr)
+     :multidimensional? multi?
+     :dimensions dims
+     :param-cnt (if (= distr-id :dirichlet) (dec dims) dims)
+     :prior-param-symbol p
+     :prior-distr-symbol (symbol (str "prior-" p))
+     :distribution fixed}))
+
+(defn- preprocess-priors
+  [priors params-sym]
+  (let [ppriors (map preprocess-prior (partition 2 priors))]
+    {:let (emit-let ppriors params-sym)
+     :prior-calc `(+ 0.0 ~@(map (fn [{:keys [prior-distr-symbol prior-param-symbol]}]
+                                  `(r/observe1 ~prior-distr-symbol ~prior-param-symbol)) ppriors))
+     :parameters-map `(hash-map ~@(mapcat (fn [{:keys [prior-param-symbol]}]
+                                            [(keyword prior-param-symbol)
+                                             prior-param-symbol]) ppriors))
+     :prior-distributions `(vector ~@(map :prior-distr-symbol ppriors))
+     :prior-distributions-let (mapcat (juxt :prior-distr-symbol :distribution) ppriors)
+     :prior-names `(vector ~@(map (comp keyword :prior-param-symbol) ppriors))
+     :sample-priors (emit-sampling-priors ppriors)
+     :param-cnt `[~@(map :param-cnt ppriors)]}))
 
 (defmacro make-model
   "Create model."
   [priors & r]
   (assert (vector? priors) "Priors should be a vector!")
   (assert (even? (count priors)) "Odd number of elements in priors.")
-  (let [symbols (take-nth 2 priors)
-        ks (map keyword symbols)
-        distr (map #(if (keyword? (first %))
-                      (conj % 'r/distribution)
-                      %) (take-nth 2 (rest priors)))
-        params (with-meta (symbol "params") {:tag 'clojure.lang.PersistentVector})
-        priords (symbol "prior-distributions")
-        priorns (symbol "prior-names")
-        parameters-map (symbol "parameters-map")]
-    `(let [~priords (list ~@distr)
-           ~priorns (list ~@ks)]
-       {:parameter-names ~priorns
-        :prior-distributions ~priords
+  (let [params (with-meta (symbol "params") {:tag 'clojure.lang.PersistentVector})
+        preprocessed-priors (preprocess-priors priors params)]
+    `(let [~@(:prior-distributions-let preprocessed-priors)
+           ~'prior-distributions ~(:prior-distributions preprocessed-priors)
+           ~'prior-names ~(:prior-names preprocessed-priors)]
+       {:parameter-names ~'prior-names
+        :prior-distributions ~'prior-distributions
+        :parameter-count ~(:param-cnt preprocessed-priors)
         :model (fn local-model#
-                 ([] (mapv r/sample ~priords))
-                 ([~params]
-                  (let [~@(interleave symbols (map-indexed (fn [id [_ k]]
-                                                             (cond
-                                                               (is-multidimensional? k) `(.nth ~params ~id)
-                                                               (is-discrete? k) `(m/floor (.nth ~params ~id)) 
-                                                               :else `(double (.nth ~params ~id)))) distr))]
-                    (let [~parameters-map (hash-map ~@(interleave ks symbols))
-                          ^ModelResult mr# (or (do ~@r) (model-result))
-                          llsum# (log-likelihood-sum mr#)]
-                      (->ModelResult (.ll mr#)
-                                     (assoc (if-let [r# (.result mr#)]
-                                              (if (map? r#)
-                                                (merge r# ~parameters-map)
-                                                (assoc ~parameters-map :model-result r#))
-                                              ~parameters-map) :LL llsum#)
-                                     llsum#)))))})))
+                 ([] ~(:sample-priors preprocessed-priors))
+                 ([~params] (local-model# ~params true))
+                 ([~params with-prior?#]
+                  (let [~@(:let preprocessed-priors)
+                        ~'prior (double (if with-prior?# ~(:prior-calc preprocessed-priors) 0.0))]
+                    (when-not (and with-prior?# (m/invalid-double? ~'prior)) ;; if priors are invalid, return nil and avoid further computation
+                      (let [~'parameters-map ~(:parameters-map preprocessed-priors)
+                            ^ModelResult mr# (or (do ~@r) (model-result))
+                            llsum# (double (reduce safe-sum 0.0 (.ll mr#)))
+                            lpsum# (+ llsum# ~'prior)]
+                        (ModelResultFinal. llsum#
+                                           lpsum#
+                                           ~params
+                                           (assoc (if-let [r# (.result mr#)]
+                                                    (if (map? r#)
+                                                      (merge r# ~'parameters-map)
+                                                      (assoc ~'parameters-map :model-result r#))
+                                                    ~'parameters-map) :LL llsum# :LP lpsum#)))))))})))
 
 (defmacro defmodel
   "Create and define model."
@@ -108,134 +164,180 @@
 
 (defmethod infer :rejection-sampling
   ([_ model] (infer :rejection-sampling model {}))
-  ([_ {:keys [parameter-names prior-distributions model]} {:keys [^long max-iters ^long samples ^double max-time ^double log-bound]
-                                                           :or {max-iters 100000 samples 1000 max-time 30.0 log-bound 0.0}}]
+  ([_ {:keys [model]} {:keys [^int max-iters ^int samples ^double max-time ^double log-bound]
+                       :or {max-iters 100000 samples 1000 max-time 30.0 log-bound 0.0}}]
    (let [finalize? (finalizer max-iters samples max-time)
          accepted  (transient [])] 
-     (loop [iter (long 0)]
+     (loop [iter (int 0)
+            accepted-cnt (int 0)]
        (if-let [finalized (finalize? accepted iter)]
-         finalized
+         (assoc finalized
+                :acceptance-ratio (/ accepted-cnt (double iter)))
          (let [params (model)
-               ^ModelResult model-res (model params)
+               ^ModelResultFinal model-res (model params false)
                result (.result model-res)
-               diff (- (.LL model-res) log-bound)]
-           (when (and (m/valid-double? diff)
-                      (or (>= diff 0.0) (< (m/log (r/drand)) diff)))
-             (conj! accepted result))
-           (recur (inc iter))))))))
+               diff (- (.ll model-res) log-bound)]
+           (if (and (m/valid-double? diff)
+                    (or (>= diff 0.0) (< (m/log (r/drand)) diff)))
+             (do
+               (conj! accepted result)
+               (recur (inc iter) (inc accepted-cnt)))
+             (recur (inc iter) accepted-cnt))))))))
 
 (defmethod infer :forward-sampling
   ([_ model] (infer :forward-sampling model {}))
-  ([_ {:keys [parameter-names prior-distributions model]} {:keys [^long max-iters ^long samples ^double max-time ^double log-bound]
-                                                           :or {max-iters 100000 samples 1000 max-time 10.0}}]
+  ([_ {:keys [model]} {:keys [^int max-iters ^int samples ^double max-time ^double log-bound]
+                       :or {max-iters 100000 samples 1000 max-time 30.0}}]
    (let [finalize? (finalizer max-iters samples max-time)
          accepted (transient [])] 
-     (loop [iter (long 0)]
+     (loop [iter (int 0)
+            accepted-cnt (int 0)]
        (if-let [finalized (finalize? accepted iter)]
-         finalized
+         (assoc finalized
+                :acceptance-ratio (/ accepted-cnt (double iter)))
          (let [params (model)
-               ^ModelResult model-res (model params)
+               ^ModelResultFinal model-res (model params false)
                result (.result model-res)]
-           (when-not (some m/invalid-double? (.ll model-res))
-             (conj! accepted result))
-           (recur (inc iter))))))))
+           (if-not (m/invalid-double? (.ll model-res))
+             (do
+               (conj! accepted result)
+               (recur (inc iter) (inc accepted-cnt)))
+             (recur (inc iter) accepted-cnt))))))))
+
+;;
+(declare best-initial-point)
 
 (defn initial-point-calc
-  ([initial-point model priors pnames] (initial-point-calc initial-point model priors pnames 10000))
-  ([initial-point model priors pnames iter]
-   (let [initial-point (or initial-point (model))
-         ^ModelResult mr (model initial-point)
-         s (unnormalized-posterior-sum mr initial-point priors)] 
-     (if (m/valid-double? s)
-       [initial-point s (.result mr)]
-       (if (pos? ^long iter)
-         (recur (model) model priors pnames (dec ^long iter))
-         (throw (Exception. "Can't find valid initial point. Check priors.")))))))
-
-(defn- stddev-without-outliers
-  ^double [data]
-  (let [data (m/seq->double-array data)
-        q1 (stats/percentile data 25)
-        q3 (stats/percentile data 75)
-        iqr15 (* 1.5 (- q3 q1))
-        l (- q1 iqr15)
-        u (+ q3 iqr15)]
-    (stats/stddev (filter (fn [^double v] (< l v u)) data))))
-
-(defn gaussian-step-calc
-  [steps ^double step-scale priors]
-  (if (and steps (== (count steps) (count priors)))
-    (vec steps)
-    (mapv #(if (satisfies? r/MultivariateDistributionProto %)
-             (let [vs (map-indexed (fn [id r] (m/sqrt (nth r id))) (r/covariance %))] 
-               (mapv (fn [^double v] (* step-scale v)) vs))
-             (let [v (r/variance %)]
-               (* step-scale ^double (if (m/valid-double? v)
-                                       (m/sqrt v)
-                                       (stddev-without-outliers (r/->seq % 5000)))))) priors)))
-
-;; huh, dirichlet is tricky as hell, sum of proposals for dirichlet should be equal 1.0
-
-(defn gaussian-next-step-fn
-  [steps priors]
-  (let [fns (mapv (fn [step prior]
-                    (cond
-                      (= :dirichlet (r/distr-id prior)) (let [cnt (dec (count step))]
-                                                          (fn [means]
-                                                            (let [v (mapv #(r/grand %1 %2) (take cnt means) step)
-                                                                  ^double s (reduce m/fast+ 0.0 v)]
-                                                              (conj v (- 1.0 s)))))
-                      (vector? step) (fn [means]
-                                       (mapv #(r/grand %1 %2) means step))
-                      :else (fn [mean]
-                              (r/grand mean step)))) steps priors)]
-    (fn [params]
-      (mapv #(%1 %2) fns params))))
+  ([initial-point model] (initial-point-calc initial-point model 50))
+  ([initial-point model search-size]
+   (let [m (:model model)]
+     (if-let [res (and initial-point (m initial-point))]
+       res
+       (let [inferred (infer :forward-sampling model {:samples search-size})]
+         (if (pos? (count (:accepted inferred)))
+           (m (best-initial-point model inferred))
+           (throw (Exception. "Can't find valid initial point. Check priors, model conditions or provide own initial point."))))))))
 
 (defmethod infer :metropolis-hastings
   ([_ model] (infer :metropolis-hastings model {}))
-  ([_ {:keys [parameter-names prior-distributions model]}
-    {:keys [^long max-iters ^long samples ^double max-time ^long burn
-            initial-point steps ^double step-scale ^long thin]
-     :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
-          step-scale 0.7 thin 1}}]
+  ([_ model {:keys [^int max-iters ^int samples ^double max-time ^int burn
+                    initial-point steps ^double step-scale ^int thin kernel]
+             :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
+                  step-scale 1.0 thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
    (let [finalize? (finalizer max-iters samples max-time)
          accepted (transient [])
-         [init-params init-lp init-result] (initial-point-calc initial-point model prior-distributions parameter-names)
-         step-vals (gaussian-step-calc steps step-scale prior-distributions)
-         step-fn (gaussian-next-step-fn step-vals prior-distributions)]
-     (loop [iter (long 0)
-            accepted-cnt (long 0)
-            out-of-prior (long 0)
-            params init-params
-            ^double lp init-lp
-            result init-result]
+         [step-vals step-fn] (kernel steps step-scale model)
+         m (:model model)]
+     (loop [iter (int 0)
+            accepted-cnt (int 0)
+            out-of-prior (int 0)
+            ^ModelResultFinal mr (initial-point-calc initial-point model)]
        (if-let [finalized (finalize? accepted iter)] 
          (assoc finalized
                 :acceptance-ratio (/ accepted-cnt (double iter))
                 :out-of-prior out-of-prior
                 :steps step-vals)
-         (let [new-params (step-fn params)
-               priors-lp (prior-sum new-params prior-distributions)]
-           (if (m/valid-double? priors-lp)
-             (let [^ModelResult model-res (model new-params)
-                   new-result (.result model-res)
-                   new-lp (+ (.LL model-res) priors-lp)
-                   reject? (or (m/invalid-double? new-lp) ;; reject 
-                               (let [diff (- new-lp lp)]
-                                 (and (neg? diff) (> (m/log (r/drand)) diff))))]
+         
+         (if-let [^ModelResultFinal new-mr (m (step-fn (.params mr)))] ;; make step and call model
+           (let [reject? (or (m/invalid-double? (.lp new-mr)) ;; reject condition
+                             (let [diff (- (.lp new-mr) (.lp mr))] ;;
+                               (and (neg? diff) (> (m/log (r/drand)) diff))))]
 
-               ;; store results
-               (when (and (>= iter burn) (zero? (mod iter thin)))
-                 (conj! accepted (if reject? result new-result)))
-               
-               (if reject?
-                 (recur (inc iter) accepted-cnt out-of-prior params lp result)
-                 (recur (inc iter) (inc accepted-cnt) out-of-prior new-params new-lp new-result)))
+             ;; store results
+             (when (and (>= iter burn) (zero? (mod iter thin))) ;; burn-in/thinning
+               (conj! accepted (if reject? (.result mr) (.result new-mr))))
              
-             (do (when (and (>= iter burn) (zero? (mod iter thin)))
-                   (conj! accepted result))
-                 (recur (inc iter) accepted-cnt (inc out-of-prior) params lp result)))))))))
+             (if reject? ;; interate for next step
+               (recur (inc iter) accepted-cnt out-of-prior mr)
+               (recur (inc iter) (inc accepted-cnt) out-of-prior new-mr)))
+           
+           (do (when (and (>= iter burn) (zero? (mod iter thin))) ;; if prior fail, store current point and interate
+                 (conj! accepted (.result mr)))
+               (recur (inc iter) accepted-cnt (inc out-of-prior) mr))))))))
+
+(defmethod infer :metropolis-within-gibbs
+  ([_ model] (infer :metropolis-within-gibbs model {}))
+  ([_ model {:keys [^int max-iters ^int samples ^double max-time ^int burn
+                    initial-point steps ^double step-scale ^int thin kernel]
+             :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
+                  step-scale 1.0 thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
+   (let [finalize? (finalizer max-iters samples max-time)
+         accepted (transient [])
+         ^ModelResultFinal init-mr (initial-point-calc initial-point model)
+         [step-vals step-fn] (kernel steps step-scale model)
+         m (:model model)
+         param-cnt (count (.params init-mr))]
+     (loop [iter (int 0)
+            accepted-cnt (int 0)
+            ^ModelResultFinal mr init-mr]
+       (if-let [finalized (finalize? accepted iter)] 
+         (assoc finalized
+                :acceptance-ratio (/ accepted-cnt (* param-cnt (double iter)))
+                :steps step-vals)
+         (let [^clojure.lang.PersistentVector new-params (step-fn (.params mr))
+               [^int inner-accepted
+                ^ModelResultFinal curr-mr] (loop [inner-accepted (int 0)
+                                                  positions (shuffle (range param-cnt)) ;; iterate through parameters and update them one by one
+                                                  ^ModelResultFinal curr-mr mr]
+                                             (if-not (seq positions)
+                                               [inner-accepted curr-mr]
+                                               (let [pos (first positions)
+                                                     ^ModelResultFinal new-mr (m (assoc (.params curr-mr) pos
+                                                                                        (.nth new-params pos)))]
+                                                 (if-not new-mr
+                                                   (recur inner-accepted (rest positions) curr-mr)
+                                                   (if (and (m/valid-double? (.lp new-mr))
+                                                            (let [diff (- (.lp new-mr) (.lp curr-mr))]
+                                                              (or (>= diff 0.0)
+                                                                  (< (m/log (r/drand)) diff))))
+                                                     (recur (inc inner-accepted) (rest positions) new-mr)
+                                                     (recur inner-accepted (rest positions) curr-mr))))))]
+
+           (when (and (>= iter burn) (zero? (mod iter thin)))
+             (conj! accepted (.result curr-mr)))
+
+           (recur (inc iter) (+ accepted-cnt inner-accepted) curr-mr)))))))
+
+;;
+
+(defmethod infer :elliptical-slice-sampling
+  ([_ model] (infer :elliptical-slice-sampling model {}))
+  ([_ model {:keys [^int samples ^double max-time ^int burn
+                    initial-point covariances ^int thin]
+             :or {samples 10000 max-time 30.0 burn 500 thin 1}}]
+   (let [finalize? (finalizer (inc (+ (* thin samples) burn)) samples max-time)
+         accepted (transient [])
+         ^ModelResultFinal init-mr (initial-point-calc initial-point model)
+         param-cnt (count (.params init-mr))
+         m (:model model)
+         proposal (r/distribution :multi-normal {:means (repeat param-cnt 0.0)
+                                                 :covariances covariances})]
+     (loop [iter (int 0)
+            ^ModelResultFinal mr init-mr]
+       (if-let [finalized (finalize? accepted iter)] 
+         (assoc finalized :acceptance-ratio 1.0)
+         (let [nu (r/sample proposal)
+               log-u (m/log (r/drand))
+               init-theta (r/drand m/TWO_PI)
+               ^ModelResultFinal curr-mr (loop [theta init-theta
+                                                theta-min (- init-theta m/TWO_PI)
+                                                theta-max init-theta]
+                                           (let [prop (v/add (v/mult (.params mr) (m/cos theta))
+                                                             (v/mult nu (m/sin theta)))
+                                                 ^ModelResultFinal new-mr (m prop)]
+                                             (if (and new-mr (m/valid-double? (.lp new-mr)))
+                                               (if (or (< (m/abs theta) 1.0e-6)
+                                                       (< log-u (- (.lp new-mr) (.lp mr))))
+                                                 new-mr
+                                                 (let [theta-min (if (neg? theta) theta theta-min)
+                                                       theta-max (if (pos? theta) theta theta-max)]
+                                                   (recur (r/drand theta-min theta-max) theta-min theta-max)))
+                                               mr)))]
+           
+           (when (and (>= iter burn) (zero? (mod iter thin)))
+             (conj! accepted (.result curr-mr)))
+           
+           (recur (inc iter) curr-mr)))))))
 
 (defmacro and+
   ([] `1)
@@ -267,22 +369,24 @@
   [distr data]
   `(r/log-likelihood ~distr ~data))
 
-(defmacro call
-  ([model] `((:model ~model) (:model ~model)))
+(defn call
+  ([model] (call model ((:model model))))
   ([model parameters]
-   `(let [^ModelResult mr# ((:model ~model) ~parameters)]
-      (assoc (.result mr#)
-             :LL (:LL mr#)))))
+   (let [^ModelResultFinal mr ((:model model) parameters false)]
+     (.result mr))))
 
 (defmacro random-priors
   [model] `((:model ~model)))
 
-(defmacro find-initial-point
+(defn best-result
+  [inference-result]
+  (first (sort-by :LP clojure.core/> (:accepted inference-result))))
+
+(defn best-initial-point
   ([model inference-result]
-   `((apply juxt (:parameter-names ~model))
-     (first (sort-by :LL clojure.core/> (:accepted ~inference-result)))))
+   ((apply juxt (:parameter-names model)) (best-result inference-result)))
   ([model]
-   `(find-initial-point ~model (forward-sampling ~model))))
+   (best-initial-point model (infer :forward-sampling model))))
 
 (defmacro ^:private as-distribution
   [distribution]
@@ -310,3 +414,4 @@
   [inferred & r]
   (map (apply juxt (map #(fn [v]
                            (v %)) r)) (:accepted inferred)))
+

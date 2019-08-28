@@ -56,6 +56,8 @@ Currently 3 inference algorithms are implemented:
 * `:forward-sampling` - every result with positive probability is traced, input parameters are randomly sampled from priors (if available). This method is good to generate samples from generative model.
 * `:rejection-sampling` - every result with probability proportional to returned likelihood is traced, input parameters are randomly sampled from priors (if available)
 * `:metropolis-hastings` - MCMC
+* `:metropolis-within-gibbs` - MCMC, gibbs steps
+* `:elliptical-slice-sampling` - "This algorithm is applicable only to models in which the prior mean of all parameters is zero.". See more [HERE](https://web.archive.org/web/20150619030502/http://www.bayesian-inference.com/mcmcess) and [HERE](https://arxiv.org/pdf/1001.0175.pdf)
 
 To gather samples just call `(infer METHOD MODEL OPTIONAL-PARAMETERS)`. For example `(infer :metropolis-hastings observer-model)`.
 
@@ -78,6 +80,7 @@ For MCMC:
 * `:initial-point` - starting point for algorithm
 * `:steps` - explicit MCMC step standard deviations
 * `:step-scale` - scale for inferred steps
+* `kernel` - jump kernel (default Gaussian)
 
 ## Returned values
 
@@ -91,6 +94,12 @@ Inference algorithm returns map where under the key `:accepted` you can find seq
 
 Distributions are backed by `fastmath` library.
 [TODO - list of parameters]
+
+## Jump kernels
+
+* regular, bactrian
+
+[TODO]
 
 ## Visualizations
 

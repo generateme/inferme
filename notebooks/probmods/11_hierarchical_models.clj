@@ -189,8 +189,9 @@
                    :bagN (colors (r/sample (make-bag :bagN)))})))
 
 (def predictives (infer :metropolis-hastings predictives-model {:samples 30000
-                                                                :initial-point [[0.2 0.2 0.2 0.2 0.2] 0.5]
+                                                                :initial-point [0.2 0.2 0.2 0.2 0.2 0.5]
                                                                 :step-scale 0.01}))
+
 
 (:acceptance-ratio predictives)
 
@@ -267,20 +268,21 @@
 
 (defn gen-steps
   [d-val e-val]
-  (vec (concat
-        (repeat 4 (vec (repeat 11 d-val)))
-        (repeat 4 e-val))))
+  (flatten (concat
+            (repeat 4 (vec (repeat 10 d-val)))
+            (repeat 4 e-val))))
 
-(def initial (find-initial-point category-model (infer :forward-sampling category-model {:samples 1e6})))
+(def initial (best-initial-point category-model (infer :forward-sampling category-model {:samples 1e6})))
 
 (def category-posterior (infer :metropolis-hastings category-model {:samples 10000
                                                                     :thin 10
                                                                     :burn 0
                                                                     ;; :initial-point initial
-                                                                    :steps (gen-steps 0.01 0.7)}))
+                                                                    :steps (gen-steps 0.008 0.2)}))
 
 
 (count (distinct (:accepted category-posterior)))
+(:steps category-posterior)
 (:acceptance-ratio category-posterior)
 (:out-of-prior category-posterior)
 
@@ -289,6 +291,7 @@
 (plot/histogram (trace category-posterior :catNshape))
 (plot/histogram (trace category-posterior :catNcolor))
 (plot/histogram (map first (trace category-posterior :shape)))
+(plot/histogram (trace category-posterior :shape-e))
 
 ;; Example: X-Bar Theory
 
