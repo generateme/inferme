@@ -23,7 +23,8 @@
 ;; => {:p 0.012137751192400903, :gen (1 0 1 0 0), :prior-p 0.012137751192400903, :tricky 1.0, :LL -17.657951015300277, :LP -18.35109819586022}
 ;; => {:p 0.5, :gen (1 1 0 0 0), :prior-p 0.750180949164074, :tricky 0.0, :LL -3.4657359027997265, :LP -4.1588830833596715}
 
-(def ensure-tricky-and-biased [1 0.99])
+(def ensure-tricky-and-biased {:tricky 1
+                               :prior-p 0.99})
 
 (defn coin-flips-demo-biased
   [n]

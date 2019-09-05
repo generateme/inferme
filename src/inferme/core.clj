@@ -369,15 +369,26 @@
   [distr data]
   `(r/log-likelihood ~distr ~data))
 
+(defn random-priors
+  ([model] (random-priors false))
+  ([model as-map?]
+   (let [ps ((:model model))]
+     (if as-map?
+       (zipmap (:parameter-names model) ps)
+       ps))))
+
+(defn- extract-parameters
+  [model parameters]
+  ((apply juxt (:parameter-names model)) (merge (random-priors model true) parameters)))
+
 (defn call
   ([model] (call model ((:model model))))
   ([model parameters] (call model parameters true))
   ([model parameters priors?]
-   (let [^ModelResultFinal mr ((:model model) parameters priors?)]
+   (let [^ModelResultFinal mr ((:model model) (if (map? parameters)
+                                                (extract-parameters model parameters)
+                                                parameters) priors?)]
      (.result mr))))
-
-(defmacro random-priors
-  [model] `((:model ~model)))
 
 (defn best-result
   [inference-result]
