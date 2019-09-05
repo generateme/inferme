@@ -371,8 +371,9 @@
 
 (defn call
   ([model] (call model ((:model model))))
-  ([model parameters]
-   (let [^ModelResultFinal mr ((:model model) parameters false)]
+  ([model parameters] (call model parameters true))
+  ([model parameters priors?]
+   (let [^ModelResultFinal mr ((:model model) parameters priors?)]
      (.result mr))))
 
 (defmacro random-priors
