@@ -1,7 +1,6 @@
 (ns inferme.utils
   (:require [fastmath.core :as m]
-            [fastmath.vector :as v]
-            [fastmath.stats :as stats])
+            [fastmath.vector :as v])
   (:import [org.apache.commons.math3.linear Array2DRowRealMatrix CholeskyDecomposition]))
 
 (set! *warn-on-reflection* true)

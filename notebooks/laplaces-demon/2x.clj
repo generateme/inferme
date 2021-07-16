@@ -5,6 +5,7 @@
             [inferme.core :refer :all]
             [inferme.plot :as plot]
             [cljplot.core :as pl]
+            [clojure2d.color :as c]
             [cljplot.build :as b]))
 
 (set! *warn-on-reflection* true)
@@ -136,6 +137,14 @@
          -0.12, -0.12, 0.01, 0.11, 0.11, 0.11, 0.25, 0.25, 0.34, 0.34, 0.44,
          0.59, 0.70, 0.70, 0.85, 0.85, 0.99, 0.99, 1.19])
 
+(let [d (map vector xs ys)] 
+  (-> (pl/xy-chart {:width 500 :height 500}
+                   (b/series [:grid]
+                             [:scatter d {:size 30}])
+                   (b/add-axes :bottom)
+                   (b/add-axes :left))
+      (pl/show)))
+
 (defmodel change-point-regression
   [alpha (:normal {:mu 0 :sd 1000}) 
    beta1 (:normal {:mu 0 :sd 1000})
@@ -188,10 +197,12 @@
       {:keys [^double alpha ^double beta1 ^double beta2 ^double theta]} (best-result res)] 
   (-> (pl/xy-chart {:width 500 :height 500}
                    (b/series [:grid]
-                             [:scatter d {:size 10}]
-                             [:abline [beta1 alpha nil theta]]
-                             [:abline [(+ beta1 beta2) (- alpha (* beta2 theta)) theta]]
-                             [:vline theta {:color :red}])
+                             [:abline [beta1 alpha nil theta] {:size 3 :color :black}]
+                             [:abline [(+ beta1 beta2) (- alpha (* beta2 theta)) theta]
+                              {:size 3 :color :black}]
+                             [:vline theta {:color :red :size 3}]
+                             [:scatter d {:size 10}])
                    (b/add-axes :bottom)
                    (b/add-axes :left))
       (pl/show)))
+

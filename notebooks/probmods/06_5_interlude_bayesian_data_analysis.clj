@@ -1,4 +1,4 @@
-(ns probmods.06-bayesian-data-analysis
+(ns probmods.06-5-interlude-bayesian-data-analysis
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
             [fastmath.stats :as stats]
@@ -15,6 +15,165 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Bayesian data analysis
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Example: Election surveys
+
+(def k 1)
+(def n 20)
+
+(defmodel model
+  [p (:uniform-real)]
+  (let [binomial (distr :binomial {:trials n :p p})
+        posterior-predictive (r/sample binomial)
+        prior-p (r/drand)
+        prior-predictive (r/sample (distr :binomial {:trials n :p prior-p}))]
+    (model-result [(observe1 binomial k)]
+                  {:prior prior-p :prior-predictive prior-predictive
+                   :posterior p :posterior-predictive posterior-predictive})))
+
+(def inferred-model (infer :rejection-sampling model {:samples 10000}))
+
+(do
+  (plot/histogram (trace inferred-model :prior) {:title "prior"})
+  (plot/frequencies (trace inferred-model :prior-predictive) {:title "prior predictive"})
+  (plot/histogram (trace inferred-model :posterior) {:title "posterior"})
+  (plot/frequencies (trace inferred-model :posterior-predictive) {:title "posterior predictive"}))
+
+(str "Expected proportion voting for A: " (stats/mean (trace inferred-model :p)))
+;; => "Expected proportion voting for A: 0.0911815645564715"
+
+(stats/mean (map (fn [^double p] (if (< 0.01 p 0.18) 1.0 0.0)) (trace inferred-model :p)))
+;; => 0.8905692081495484
+
+;;
+
+(defn cred
+  ^double [d ^double low ^double up]
+  (stats/mean (map (fn [^double p] (if (< low p up) 1.0 0.0)) d)))
+
+(defn find-hdi
+  [^double targetp]
+  (fn [d ^double low ^double up ^double eps]
+    (if (< (cred d low up) targetp)
+      [low up]
+      (let [y (cred d (+ low eps) up)
+            z (cred d low (- up eps))]
+        (if (> y z)
+          (recur d (+ low eps) up eps)
+          (recur d low (- up eps) eps))))))
+
+(def result
+  (trace (infer :rejection-sampling (make-model
+                                     [x (:normal)]
+                                     (model-result [(condition (pos? x))]))) :x))
+
+(plot/histogram result)
+
+((find-hdi 0.95) result -10 10 0.1)
+;; => [-1.8790524691780774E-14 2.0000000000000195]
+
+;; Example: logistic regression
+
+(def data [{:age 20 :n 20 :k 1},
+           {:age 30 :n 20 :k 5},
+           {:age 40 :n 20 :k 17},
+           {:age 50 :n 20 :k 18}])
+
+(defmodel model
+  [a (:normal)
+   b (:normal)]
+  (model-result (map (fn [{:keys [^long age n k]}]
+                       (observe1 (distr :binomial {:trials n
+                                                   :p (m/sigmoid (+ b (* a age)))}) k)) data)))
+
+(def result (infer :metropolis-hastings model {:samples 50000
+                                               :burn 2000
+                                               :step-scale 0.03}))
+
+(:acceptance-ratio result)
+
+(do
+  (plot/histogram (trace result :a) {:title "a"})
+  (plot/histogram (trace result :b) {:title "b"}))
+
+;; Posterior prediction and model checking
+
+(def ages (map :age data))
+
+(defmodel model
+  [a (:normal)
+   b (:normal)]
+  (model-result (map (fn [{:keys [^long age n k]}]
+                       (observe1 (distr :binomial {:trials n
+                                                   :p (m/sigmoid (+ b (* a age)))}) k)) data)
+                (fn [] (mapv (fn [^long age]
+                              (sample (distr :binomial {:trials 20
+                                                        :p (m/sigmoid (+ b (* a age)))}))) ages))))
+
+(def result (infer :metropolis-hastings model {:samples 50000
+                                               :burn 2000
+                                               :step-scale 0.03}))
+
+(:acceptance-ratio result)
+
+(def ppstats (map-indexed (fn [idx age]
+                            (stats/mean (map #(nth % idx) (trace result)))) ages))
+(def datastats (map :k data))
+
+(plot/scatter (map vector ppstats datastats))
+
+;; Model selection
+
+(def k 5)
+(def n 20)
+
+(defmodel model
+  []
+  (let [x (randval :simple :complex)
+        p (if (= x :simple) 0.5 (r/drand))]
+    (model-result [(observe1 (distr :binomial {:trials n
+                                               :p p}) k)]
+                  {:model x})))
+
+(def result (infer :rejection-sampling model))
+
+(plot/frequencies (trace result :model))
+
+;; Bayes’ factor
+
+(def simple-model (distr :binomial {:p 0.5 :n n}))
+(def complex-model (distr :integer-discrete-distribution {:data (repeatedly 10000 #(let [p (r/drand)
+                                                                                         d (distr :binomial
+                                                                                                  {:p p :trials n})]
+                                                                                     (sample d)))}))
+
+(def simple-likelihood (r/pdf simple-model k))
+(def complex-likelihood (r/pdf complex-model k))
+
+(/ simple-likelihood complex-likelihood)
+;; => 0.32784404881513296
+
+;; Savage-Dickey method
+
+(def complex-model-prior (repeatedly 5000 r/drand))
+
+(defmodel complex-model-posterior-model
+  [p (:uniform-real)]
+  (let [binomial (distr :binomial {:trials n :p p})]
+    (model-result [(observe1 binomial k)] p)))
+
+(def complex-model-posterior (trace (infer :rejection-sampling complex-model-posterior-model {:samples 5000})))
+
+
+(def savage-dickey-denomenator (cred complex-model-prior 0.45 0.55))
+(def savage-dickey-numerator (cred complex-model-posterior 0.45 0.55))
+
+(/ savage-dickey-numerator savage-dickey-denomenator)
+;; => 0.3290828777385723
+
+
+;; OLD EXAMPLES, currently removed from the book
+
 
 ;; People’s models of coins
 
@@ -99,25 +258,6 @@
 
 ;; A simple illustration
 
-(def k 1)
-(def n 20)
-
-(defmodel model
-  [p (:uniform-real)]
-  (let [binomial (distr :binomial {:trials n :p p})
-        posterior-predictive (r/sample binomial)
-        prior-p (r/drand)
-        prior-predictive (r/sample (distr :binomial {:trials n :p prior-p}))]
-    (model-result [(observe1 binomial k)]
-                  {:prior prior-p :prior-predictive prior-predictive
-                   :posterior p :posterior-predictive posterior-predictive})))
-
-(let [inferred-model (infer :rejection-sampling model {:samples 2000})]
-  (plot/histogram (trace inferred-model :prior))
-  (plot/frequencies (trace inferred-model :prior-predictive))
-  (plot/histogram (trace inferred-model :posterior))
-  (plot/frequencies (trace inferred-model :posterior-predictive)))
-
 ;; Posterior prediction and model checking
 
 (def k1 0)
@@ -157,53 +297,10 @@
 
 ;; Comparing hypotheses
 
-(def k 7)
-(def n 20)
-
-(defmodel compare-models
-  [prior (:bernoulli)]
-  (let [x (if (pos? prior) :simple :complex)
-        p (if (= x :simple) 0.5 (r/drand))
-        binomial (distr :binomial {:trials n :p p})]
-    (model-result [(observe1 binomial k)]
-                  {:model x})))
-
-(let [model-posterior (infer :rejection-sampling compare-models {:samples 2000})]
-  (plot/frequencies (trace model-posterior :model)))
-
 ;; Bayes’ factor
-
-(def simple-likelihood (m/exp (r/lpdf (distr :binomial {:trials n :p 0.5}) k)))
-(def complex-model (distr :integer-discrete-distribution
-                          {:data (repeatedly 10000 #(r/sample (distr :binomial {:trials n :p (r/drand)})))}))
-(def complex-likelihood (m/exp (r/lpdf complex-model k)))
-(def bayes-factor (/ ^double simple-likelihood ^double complex-likelihood))
-
-bayes-factor
-;; => 1.6212463378906243
 
 ;; Savage-Dickey method
 ;; not sure if it's the same
-
-(defmodel complex-model-prior []
-  (trace-result (r/drand)))
-
-(def cmprior (infer :forward-sampling complex-model-prior {:samples 10000}))
-(def cmprior-distr (as-continuous-distribution cmprior :model-result))
-
-(defmodel complex-model-posterior
-  [p (:uniform-real)]
-  (let [binomial (distr :binomial {:trials n :p p})]
-    (model-result [(observe1 binomial k)])))
-
-(def cmposterior (infer :rejection-sampling complex-model-posterior {:samples 10000}))
-(def cmposterior-distr (as-continuous-distribution cmposterior :p))
-
-;; should be ok...
-(def savage-dickey-denominator (r/pdf cmprior-distr 0.5))
-(def savage-dickey-numerator (r/pdf cmposterior-distr 0.5))
-(/ savage-dickey-numerator savage-dickey-denominator)
-;; => 1.5887164059211862
 
 ;; Example: Linear regression and tug of war
 

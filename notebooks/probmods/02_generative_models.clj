@@ -1,7 +1,6 @@
 (ns probmods.02-generative-models
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
-            [fastmath.stats :as stats]
             [inferme.core :refer :all]
             [inferme.plot :as plot]))
 
@@ -54,9 +53,9 @@
       trick-coin (make-coin 0.95)
       bent-coin (make-coin 0.25)]
 
-  (plot/frequencies (repeatedly 20 fair-coin))
-  (plot/frequencies (repeatedly 20 trick-coin))
-  (plot/frequencies (repeatedly 20 bent-coin)))
+  (plot/frequencies (repeatedly 20 fair-coin) {:title "Fair coin"})
+  (plot/frequencies (repeatedly 20 trick-coin) {:title "Trick coin"})
+  (plot/frequencies (repeatedly 20 bent-coin) {:title "Bent coin"}))
 
 (defn bend [coin]
   (let [c07 (make-coin 0.7)
@@ -90,7 +89,7 @@
                 (and tb (flipb 0.7))
                 (and other (flipb 0.01)))
       fever (or (and cold (flipb 0.3))
-                (and lung-cancer (flipb 0.5))
+                (and stomach-flu (flipb 0.5))
                 (and tb (flipb 0.2))
                 (and other (flipb 0.01)))
       chest-pain (or (and lung-cancer (flipb 0.5))
@@ -127,6 +126,9 @@
 ;; => 1
 
 ;; score in WebPPL
+(score b 1)
+;; => -0.6931471805599453
+;; same as `observe1`
 (observe1 b 1)
 ;; => -0.6931471805599453
 
@@ -169,14 +171,19 @@
 ;; => [true false]
 
 (let [a (flipb)
-      b (if a (flipb 0.3) (flipb 0.7)) ]
+      b (if a (flipb 0.3) (flipb 0.7))]
   [a b])
 ;; => [false true]
 
+(let [random-pair #(let [a (flipb)
+                         b (if a (flipb 0.3) (flipb 0.7))]
+                     (str {:a a :b b}))]
+  (plot/frequencies (repeatedly 1000 random-pair) {:sort? true}))
+
 ;; Sum Rule
-(or (flipb) (flipb))
+(or (flipb) (flipb)) ;; booleans: true/false
 ;; => false
-(or+ (flip) (flip))
+(or+ (flip) (flip)) ;; numbers: 0/1
 ;; => 1
 
 ;; Stochastic recursion

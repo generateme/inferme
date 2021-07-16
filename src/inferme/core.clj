@@ -2,16 +2,15 @@
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
             [fastmath.vector :as v]
-            [fastmath.stats :as stats]
-            [inferme.jump :as jump]
-            [inferme.utils :as utils]))
+            [fastmath.protocols :as prot]
+            [inferme.jump :as jump]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
 (m/use-primitive-operators)
 
 (deftype ModelResult [ll result])
-(deftype ModelResultFinal [^double ll ^double lp ^clojure.lang.PersistentVector params result])
+(deftype ModelResultFinal [^double ll ^double lp ^clojure.lang.PersistentVector params parameters-map result])
 
 (defmacro model-result
   "Result creator returned by model consisting list of log likelihoods and optional model value."
@@ -37,22 +36,14 @@
 
 ;;
 
-(defn- ^:private multidimensional? [d] (satisfies? r/MultivariateDistributionProto d))
-
-(defn- emit-subsum-dirichlet
-  [model-input ^long id ^long param-cnt]
-  `(- 1.0 ~@(map (fn [^long lid]
-                   `(double (.nth ~model-input ~(+ lid id)))) (range param-cnt))))
+(defn- ^:private multidimensional? [d] (satisfies? prot/MultivariateDistributionProto d))
 
 (defn- emit-let 
   [ppriors model-input]
   (first
-   (reduce (fn [[buff ^int id] {:keys [distr-id multidimensional? continuous? ^int dimensions prior-param-symbol ^int param-cnt]}]
+   (reduce (fn [[buff ^int id] {:keys [multidimensional? continuous? prior-param-symbol ^int param-cnt]}]
              (let [symbols
                    (cond
-                     (and multidimensional?
-                          (= :dirichlet distr-id)) [prior-param-symbol `(conj (subvec ~model-input ~id ~(+ id param-cnt))
-                                                                              ~(emit-subsum-dirichlet model-input id param-cnt))]
                      multidimensional? [prior-param-symbol `(subvec ~model-input ~id ~(+ id param-cnt))]
                      (not continuous?) [prior-param-symbol `(m/floor (.nth ~model-input ~id))]
                      :else [prior-param-symbol `(double (.nth ~model-input ~id))])]
@@ -61,10 +52,8 @@
 
 (defn- emit-sampling-priors
   [ppriors]
-  (let [lst (map (fn [{:keys [distr-id prior-distr-symbol ^int dimensions]}]
-                   (if (= distr-id :dirichlet)
-                     `(subvec (r/sample ~prior-distr-symbol) 0 ~(dec dimensions))
-                     `(r/sample ~prior-distr-symbol))) ppriors)]
+  (let [lst (map (fn [{:keys [prior-distr-symbol]}]
+                   `(r/sample ~prior-distr-symbol)) ppriors)]
     (if (some :multidimensional? ppriors)
       `(vec (flatten [~@lst]))
       `[~@lst])))
@@ -83,12 +72,12 @@
                       ds
                       (r/dimensions (eval fixed)))
                     (r/dimensions dstr))
-        distr-id (r/distr-id dstr)]
+        distr-id (r/distribution-id dstr)]
     {:distr-id distr-id
      :continuous? (r/continuous? dstr)
      :multidimensional? multi?
      :dimensions dims
-     :param-cnt (if (= distr-id :dirichlet) (dec dims) dims)
+     :param-cnt dims
      :prior-param-symbol p
      :prior-distr-symbol (symbol (str "prior-" p))
      :distribution fixed}))
@@ -135,11 +124,9 @@
                         (ModelResultFinal. llsum#
                                            lpsum#
                                            ~params
-                                           (assoc (if-let [r# (.result mr#)]
-                                                    (if (map? r#)
-                                                      (merge r# ~'parameters-map)
-                                                      (assoc ~'parameters-map :model-result r#))
-                                                    ~'parameters-map) :LL llsum# :LP lpsum#)))))))})))
+                                           ~'parameters-map
+                                           (.result mr#)))))))})))
+
 
 (defmacro defmodel
   "Create and define model."
@@ -148,15 +135,29 @@
 
 ;;;;;;;;;;;
 
-(defmulti infer (fn [k & r] k))
+(defmulti infer (fn [k & _] k))
+
+(defn- recursive-res
+  [res]
+  (cond
+    (fn? res) (recur (res))
+    (map? res) res
+    :else {:model-result res}))
+
+(defn- process-result
+  [^ModelResultFinal res]
+  (assoc
+   (merge (.parameters-map res)
+          (recursive-res (.result res)))
+   :LL (.ll res) :LP (.lp res)))
 
 (defn- finalizer
   [^long max-iters ^long samples ^double max-time]
   (let [start-time (System/currentTimeMillis)]
     (fn [a ^long iter]
       (let [reason (cond
-                     (== iter max-iters) :max-iters
-                     (== samples (count a)) :samples
+                     (>= iter max-iters) :max-iters
+                     (>= (count a) samples) :samples
                      (> (/ (- (System/currentTimeMillis) start-time) 1000.0) max-time) :max-time
                      :else false)]
         (when reason
@@ -166,43 +167,39 @@
   ([_ model] (infer :rejection-sampling model {}))
   ([_ {:keys [model]} {:keys [^int max-iters ^int samples ^double max-time ^double log-bound]
                        :or {max-iters 100000 samples 1000 max-time 30.0 log-bound 0.0}}]
-   (let [finalize? (finalizer max-iters samples max-time)
-         accepted  (transient [])] 
+   (let [finalize? (finalizer max-iters samples max-time)] 
      (loop [iter (int 0)
+            accepted  (transient [])
             accepted-cnt (int 0)]
        (if-let [finalized (finalize? accepted iter)]
          (assoc finalized
                 :acceptance-ratio (/ accepted-cnt (double iter)))
          (let [params (model)
                ^ModelResultFinal model-res (model params false)
-               result (.result model-res)
+               result (process-result model-res)
                diff (- (.ll model-res) log-bound)]
            (if (and (m/valid-double? diff)
                     (or (>= diff 0.0) (< (m/log (r/drand)) diff)))
-             (do
-               (conj! accepted result)
-               (recur (inc iter) (inc accepted-cnt)))
-             (recur (inc iter) accepted-cnt))))))))
+             (recur (inc iter) (conj! accepted result) (inc accepted-cnt))
+             (recur (inc iter) accepted accepted-cnt))))))))
 
 (defmethod infer :forward-sampling
   ([_ model] (infer :forward-sampling model {}))
-  ([_ {:keys [model]} {:keys [^int max-iters ^int samples ^double max-time ^double log-bound]
+  ([_ {:keys [model]} {:keys [^int max-iters ^int samples ^double max-time]
                        :or {max-iters 100000 samples 1000 max-time 30.0}}]
-   (let [finalize? (finalizer max-iters samples max-time)
-         accepted (transient [])] 
+   (let [finalize? (finalizer max-iters samples max-time)] 
      (loop [iter (int 0)
+            accepted (transient [])
             accepted-cnt (int 0)]
        (if-let [finalized (finalize? accepted iter)]
          (assoc finalized
                 :acceptance-ratio (/ accepted-cnt (double iter)))
          (let [params (model)
                ^ModelResultFinal model-res (model params false)
-               result (.result model-res)]
+               result (process-result model-res)]
            (if-not (m/invalid-double? (.ll model-res))
-             (do
-               (conj! accepted result)
-               (recur (inc iter) (inc accepted-cnt)))
-             (recur (inc iter) accepted-cnt))))))))
+             (recur (inc iter) (conj! accepted result) (inc accepted-cnt))
+             (recur (inc iter) accepted accepted-cnt))))))))
 
 ;;
 (declare best-initial-point)
@@ -225,14 +222,14 @@
              :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
                   step-scale 1.0 thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
    (let [finalize? (finalizer max-iters samples max-time)
-         accepted (transient [])
          [step-vals step-fn] (kernel steps step-scale model)
          m (:model model)]
      (loop [iter (int 0)
+            accepted (transient [])
             accepted-cnt (int 0)
             out-of-prior (int 0)
             ^ModelResultFinal mr (initial-point-calc initial-point model)]
-       (if-let [finalized (finalize? accepted iter)] 
+       (if-let [finalized (finalize? accepted iter)]
          (assoc finalized
                 :acceptance-ratio (/ accepted-cnt (double iter))
                 :out-of-prior out-of-prior
@@ -240,20 +237,20 @@
          
          (if-let [^ModelResultFinal new-mr (m (step-fn (.params mr)))] ;; make step and call model
            (let [reject? (or (m/invalid-double? (.lp new-mr)) ;; reject condition
-                             (let [diff (- (.lp new-mr) (.lp mr))] ;;
-                               (and (neg? diff) (> (m/log (r/drand)) diff))))]
-
-             ;; store results
-             (when (and (>= iter burn) (zero? (mod iter thin))) ;; burn-in/thinning
-               (conj! accepted (if reject? (.result mr) (.result new-mr))))
+                             (let [diff (- (.lp new-mr) (.lp mr))]
+                               (and (neg? diff) (> (m/log (r/drand)) diff))))
+                 new-accepted (if (and (>= iter burn) (zero? (mod iter thin))) ;; burn-in/thinning
+                                (conj! accepted (if reject? (process-result mr) (process-result new-mr)))
+                                accepted)]
              
              (if reject? ;; interate for next step
-               (recur (inc iter) accepted-cnt out-of-prior mr)
-               (recur (inc iter) (inc accepted-cnt) out-of-prior new-mr)))
+               (recur (inc iter) new-accepted accepted-cnt out-of-prior mr)
+               (recur (inc iter) new-accepted (inc accepted-cnt) out-of-prior new-mr)))
            
-           (do (when (and (>= iter burn) (zero? (mod iter thin))) ;; if prior fail, store current point and interate
-                 (conj! accepted (.result mr)))
-               (recur (inc iter) accepted-cnt (inc out-of-prior) mr))))))))
+           (let [new-accepted (if (and (>= iter burn) (zero? (mod iter thin))) ;; if prior fail, store current point and interate
+                                (conj! accepted (process-result mr))
+                                accepted)]
+             (recur (inc iter) new-accepted accepted-cnt (inc out-of-prior) mr))))))))
 
 (defmethod infer :metropolis-within-gibbs
   ([_ model] (infer :metropolis-within-gibbs model {}))
@@ -262,12 +259,12 @@
              :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
                   step-scale 1.0 thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
    (let [finalize? (finalizer max-iters samples max-time)
-         accepted (transient [])
          ^ModelResultFinal init-mr (initial-point-calc initial-point model)
          [step-vals step-fn] (kernel steps step-scale model)
          m (:model model)
          param-cnt (count (.params init-mr))]
      (loop [iter (int 0)
+            accepted (transient [])
             accepted-cnt (int 0)
             ^ModelResultFinal mr init-mr]
        (if-let [finalized (finalize? accepted iter)] 
@@ -291,12 +288,12 @@
                                                               (or (>= diff 0.0)
                                                                   (< (m/log (r/drand)) diff))))
                                                      (recur (inc inner-accepted) (rest positions) new-mr)
-                                                     (recur inner-accepted (rest positions) curr-mr))))))]
+                                                     (recur inner-accepted (rest positions) curr-mr))))))
+               new-accepted (if (and (>= iter burn) (zero? (mod iter thin)))
+                              (conj! accepted (process-result curr-mr))
+                              accepted)]
 
-           (when (and (>= iter burn) (zero? (mod iter thin)))
-             (conj! accepted (.result curr-mr)))
-
-           (recur (inc iter) (+ accepted-cnt inner-accepted) curr-mr)))))))
+           (recur (inc iter) new-accepted (+ accepted-cnt inner-accepted) curr-mr)))))))
 
 ;;
 
@@ -306,13 +303,13 @@
                     initial-point covariances ^int thin]
              :or {samples 10000 max-time 30.0 burn 500 thin 1}}]
    (let [finalize? (finalizer (inc (+ (* thin samples) burn)) samples max-time)
-         accepted (transient [])
          ^ModelResultFinal init-mr (initial-point-calc initial-point model)
          param-cnt (count (.params init-mr))
          m (:model model)
          proposal (r/distribution :multi-normal {:means (repeat param-cnt 0.0)
                                                  :covariances covariances})]
      (loop [iter (int 0)
+            accepted (transient [])
             ^ModelResultFinal mr init-mr]
        (if-let [finalized (finalize? accepted iter)] 
          (assoc finalized :acceptance-ratio 1.0)
@@ -334,10 +331,11 @@
                                                    (recur (r/drand theta-min theta-max) theta-min theta-max)))
                                                mr)))]
            
-           (when (and (>= iter burn) (zero? (mod iter thin)))
-             (conj! accepted (.result curr-mr)))
-           
-           (recur (inc iter) curr-mr)))))))
+           (recur (inc iter)
+                  (if (and (>= iter burn) (zero? (mod iter thin)))
+                    (conj! accepted (process-result curr-mr))
+                    accepted)
+                  curr-mr)))))))
 
 (defmacro and+
   ([] `1)
@@ -365,12 +363,16 @@
   [distr v]
   `(r/lpdf ~distr ~v))
 
+(defmacro score
+  [distr v]
+  `(r/lpdf ~distr ~v))
+
 (defmacro observe
   [distr data]
   `(r/log-likelihood ~distr ~data))
 
 (defn random-priors
-  ([model] (random-priors false))
+  ([model] (random-priors model false))
   ([model as-map?]
    (let [ps ((:model model))]
      (if as-map?
@@ -388,7 +390,7 @@
    (let [^ModelResultFinal mr ((:model model) (if (map? parameters)
                                                 (extract-parameters model parameters)
                                                 parameters) priors?)]
-     (.result mr))))
+     (process-result mr))))
 
 (defn best-result
   [inference-result]
@@ -396,7 +398,8 @@
 
 (defn best-initial-point
   ([model inference-result]
-   ((apply juxt (:parameter-names model)) (best-result inference-result)))
+   (when-let [pnames (seq (:parameter-names model))] 
+     (vec (flatten ((apply juxt pnames) (best-result inference-result))))))
   ([model]
    (best-initial-point model (infer :forward-sampling model))))
 

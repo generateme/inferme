@@ -4,7 +4,8 @@
             [fastmath.stats :as stats]
             [fastmath.vector :as v]
             [inferme.core :refer :all]
-            [inferme.plot :as plot]))
+            [inferme.plot :as plot]
+            [inferme.jump :as jump]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
@@ -60,10 +61,10 @@
                                     :probabilities (r/sample dirichlet)})))] 
     (model-result (map (fn [datum]
                          (observe1 (make-bag (:bag datum)) (colors-map (:draw datum)))) observed-data)
-                  {:bag1 (colors (r/sample (make-bag :bag1)))
-                   :bag2 (colors (r/sample (make-bag :bag2)))
-                   :bag3 (colors (r/sample (make-bag :bag3)))
-                   :bagN (colors (r/sample (make-bag :bagN)))})))
+                  (fn [] {:bag1 (colors (r/sample (make-bag :bag1)))
+                         :bag2 (colors (r/sample (make-bag :bag2)))
+                         :bag3 (colors (r/sample (make-bag :bag3)))
+                         :bagN (colors (r/sample (make-bag :bagN)))}))))
 
 (def predictives (infer :metropolis-hastings predictives-model))
 
@@ -204,8 +205,6 @@
 
 ;; Example: The Shape Bias
 
-;;;;; works bad!
-
 (def attributes [:shape :color :texture :size])
 (def values (zipmap attributes (repeat (range 11))))
 (def observed-data [{:cat :cat1 :shape 1, :color 1, :texture 1, :size 1},
@@ -221,6 +220,13 @@
 (def exponential (distr :exponential))
 (def dirichlet (distr :dirichlet {:alpha (repeat 11 1)}))
 
+(defn gen-steps
+  [d-val e-val]
+  (flatten (concat
+            (repeat 4 (vec (repeat 11 d-val)))
+            (repeat 4 e-val))))
+
+
 ;; variant 1
 (defmodel category-model
   []
@@ -235,12 +241,25 @@
                                           (observe1 (make-attr-dist (:cat datum) attr) (datum attr)))
                                         attributes))
                                  observed-data))
-                  {:cat5shape (r/sample (make-attr-dist :cat5 :shape))
-                   :cat5color (r/sample (make-attr-dist :cat5 :color))
-                   :catNshape (r/sample (make-attr-dist :catN :shape))
-                   :catNcolor (r/sample (make-attr-dist :catN :color))})))
+                  (fn [] {:cat5shape (r/sample (make-attr-dist :cat5 :shape))
+                         :cat5color (r/sample (make-attr-dist :cat5 :color))
+                         :catNshape (r/sample (make-attr-dist :catN :shape))
+                         :catNcolor (r/sample (make-attr-dist :catN :color))}))))
 
-;; variant 2
+(def category-posterior (infer :metropolis-hastings category-model {:samples 100000
+                                                                    :max-time 60}))
+
+
+(count (:accepted category-posterior))
+(count (distinct (:accepted category-posterior)))
+(:acceptance-ratio category-posterior)
+
+(plot/frequencies (trace category-posterior :cat5shape))
+(plot/frequencies (trace category-posterior :cat5color))
+(plot/frequencies (trace category-posterior :catNshape))
+(plot/frequencies (trace category-posterior :catNcolor))
+
+;; variant 2, with priors
 (defmodel category-model
   [shape (:dirichlet {:alpha (repeat (count (:shape values)) 1.0)})
    color (:dirichlet {:alpha (repeat (count (:color values)) 1.0)})
@@ -257,40 +276,41 @@
                                            {:data (values attr)
                                             :probabilities probs}))))]
     (model-result (flatten (pmap (fn [datum]
-                                   (mapv (fn [attr]
-                                           (observe1 (make-attr-dist (:cat datum) attr) (datum attr)))
-                                         attributes))
+                                   (map (fn [attr]
+                                          (observe1 (make-attr-dist (:cat datum) attr) (datum attr)))
+                                        attributes))
                                  observed-data))
-                  {:cat5shape (r/mean (make-attr-dist :cat5 :shape))
-                   :cat5color (r/mean (make-attr-dist :cat5 :color))
-                   :catNshape (r/mean (make-attr-dist :catN :shape))
-                   :catNcolor (r/mean (make-attr-dist :catN :color))})))
+                  (fn [] {:cat5shape (r/sample (make-attr-dist :cat5 :shape))
+                         :cat5color (r/sample (make-attr-dist :cat5 :color))
+                         :catNshape (r/sample (make-attr-dist :catN :shape))
+                         :catNcolor (r/sample (make-attr-dist :catN :color))}))))
 
-(defn gen-steps
-  [d-val e-val]
-  (flatten (concat
-            (repeat 4 (vec (repeat 10 d-val)))
-            (repeat 4 e-val))))
+(def initial (best-initial-point category-model (infer :forward-sampling category-model {:samples 100000})))
 
-(def initial (best-initial-point category-model (infer :forward-sampling category-model {:samples 1e6})))
+(def category-posterior (infer :metropolis-hastings category-model {:samples 100000
+                                                                    :initial-point initial
+                                                                    :burn 50
+                                                                    :max-time 60
+                                                                    :steps (gen-steps 0.005 0.2)}))
 
-(def category-posterior (infer :metropolis-hastings category-model {:samples 10000
-                                                                    :thin 10
-                                                                    :burn 0
-                                                                    ;; :initial-point initial
-                                                                    :steps (gen-steps 0.008 0.2)}))
+(def category-posterior (infer :metropolis-within-gibbs category-model {:samples 100000
+                                                                        :initial-point initial
+                                                                        :burn 50
+                                                                        :max-time 60
+                                                                        :steps (gen-steps 0.01 0.1)}))
 
 
+(count (:accepted category-posterior))
 (count (distinct (:accepted category-posterior)))
 (:steps category-posterior)
 (:acceptance-ratio category-posterior)
 (:out-of-prior category-posterior)
 
-(plot/histogram (trace category-posterior :cat5shape))
-(plot/histogram (trace category-posterior :cat5color))
-(plot/histogram (trace category-posterior :catNshape))
-(plot/histogram (trace category-posterior :catNcolor))
-(plot/histogram (map first (trace category-posterior :shape)))
+(plot/frequencies (trace category-posterior :cat5shape))
+(plot/frequencies (trace category-posterior :cat5color))
+(plot/frequencies (trace category-posterior :catNshape))
+(plot/frequencies (trace category-posterior :catNcolor))
+(plot/histogram (map first (trace category-posterior :size)))
 (plot/histogram (trace category-posterior :shape-e))
 
 ;; Example: X-Bar Theory
@@ -332,7 +352,7 @@
                     "N second"
                     "N first"))))
 
-(def results (infer :metropolis-hastings model {:samples 20000 :step-scale 0.7}))
+(def results (infer :metropolis-hastings model {:samples 20000 :step-scale 0.5}))
 
 (:acceptance-ratio results)
 (:out-of-prior results)

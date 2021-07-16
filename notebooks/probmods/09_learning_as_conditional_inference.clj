@@ -17,7 +17,7 @@
 ;; Example: Learning About Coins
 
 ;; head = 1
-(def observed-data (repeat 10 1))
+(def observed-data (repeat 5 1))
 (def fair-prior 0.999)
 
 (defmodel fairness-model
@@ -25,7 +25,7 @@
   (let [coin (distr :bernoulli {:p (if (pos? fair) 0.5 0.95)})]
     (model-result [(observe coin observed-data)])))
 
-(def fairness-posterior (infer :metropolis-hastings fairness-model {:step-scale 25}))
+(def fairness-posterior (infer :metropolis-hastings fairness-model))
 
 (:acceptance-ratio fairness-posterior)
 
@@ -34,17 +34,19 @@
 (defn fairness-posterior
   [observed-data]
   (infer :metropolis-hastings (make-model
-                               [fair (:bernoulli {:p 0.999})]
-                               (let [coin (distr :bernoulli {:p (if (pos? fair) 0.5 0.95)})]
-                                 (model-result [(observe coin observed-data)]))) {:step-scale 25}))
+                               []
+                               (let [fair (flip 0.999)
+                                     coin (distr :bernoulli {:p (if (pos? fair) 0.5 0.95)})]
+                                 (model-result [(observe coin observed-data)]
+                                               fair)))))
 
 (def true-weight 0.9)
 (def full-data-set (repeatedly 100 #(flip true-weight)))
 (def observed-data-sizes [1 3 6 10 20 30 50 70 100])
-(def estimates (pmap (fn [N]
-                       (stats/mean (trace (fairness-posterior (take N full-data-set)) :fair))) observed-data-sizes))
+(def estimates #(pmap (fn [N]
+                        (stats/mean (trace (fairness-posterior (take N full-data-set))))) observed-data-sizes))
 
-(plot/line (map vector observed-data-sizes estimates))
+(plot/line (map vector observed-data-sizes (estimates)))
 
 ;; Independent and Exchangeable Sequences
 

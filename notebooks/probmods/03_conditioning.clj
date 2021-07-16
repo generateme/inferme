@@ -48,9 +48,9 @@
         b (flip)
         c (flip)
         d (+ a b c)]
-    (when (= d 3) d)))
+    (when (= d 3) a)))
 
-(let [dist (repeatedly 10000 model)]
+(let [dist (remove nil? (repeatedly 10000 model))]
   (plot/frequencies dist))
 
 (defmodel model
@@ -58,7 +58,7 @@
    b (:bernoulli)
    c (:bernoulli)]
   (let [d (+ a b c)]
-    (model-result [(condition (== d 3))] d)))
+    (model-result [(condition (== d 3))] a)))
 
 (let [dist (trace (infer :rejection-sampling model) :model-result)]
   (plot/frequencies dist))
@@ -68,7 +68,7 @@
    b (:bernoulli)
    c (:bernoulli)]
   (let [d (+ a b c)]
-    (model-result [(condition (>= d 2))] d)))
+    (model-result [(condition (>= d 2))] a)))
 
 (let [dist (trace (infer :rejection-sampling model) :a)]
   (plot/frequencies dist))
@@ -100,7 +100,7 @@
 ;; Conditional Distributions
 
 (def observed-data 1)
-(defn likelihood ^long [^long h] (if (== h 1) (flip 0.9) (flip 0.1)))
+(defn likelihood ^long [^long h] (if (pos? h) (flip 0.9) (flip 0.1)))
 
 (def posterior (infer :rejection-sampling (make-model
                                            [hypothesis (:bernoulli)]
@@ -134,18 +134,19 @@
                                        (model-result [(condition (== a 1))])))]
   (plot/frequencies (trace dist :a)))
 
-;; wrong
+;; wrong, default `log-bound` is set to 0, condition returns `1` as a log-likelihood
 (let [dist (infer :rejection-sampling (make-model
                                        [a (:bernoulli)]
                                        (model-result [(condition (== a 1) 1 0)])))]
   (plot/frequencies (trace dist :a)))
 
-;; good 
+;; good (we need to setup log-bound to `1` to make it work, `condition` returns `1` as a log-likelihood so we have to raise our bound above default `0`)
 (let [dist (infer :rejection-sampling (make-model
                                        [a (:bernoulli)]
-                                       (model-result [(condition (== a 1) 1 0)])) {:log-bound 2})]
+                                       (model-result [(condition (== a 1) 1 0)])) {:log-bound 1.0})]
   (plot/frequencies (trace dist :a)))
 
+;; metropolis-hastings checks relative log-likelihoods so there is no need to raise the bound.
 (let [dist (infer :metropolis-hastings (make-model
                                         [a (:bernoulli)]
                                         (model-result [(condition (== a 1) 1 0)])))]
@@ -153,7 +154,7 @@
 
 ;; Example: Reasoning about Tug of War
 
-(let [strength (memoize (fn [person] (m/abs (r/grand 1 1))))
+(let [strength (memoize (fn [person] (m/max 0.01 (r/grand 1 1))))
       lazy (fn [person] (flipb m/THIRD))
       pulling (fn [person] (if (lazy person)
                             (* 0.5 ^double (strength person))
@@ -174,11 +175,11 @@
 (defmodel model
   []
   (let [strength (memoize (fn [person]
-                            (m/abs (r/grand 1 1))))
+                            (m/max 0.01 (r/grand 1 1))))
         lazy (fn [person] (flipb m/THIRD))
         pulling (fn [person] (if (lazy person)
-                               (* 0.5 ^double (strength person))
-                               (strength person)))
+                              (* 0.5 ^double (strength person))
+                              (strength person)))
         total-pulling (fn [team] (reduce clojure.core/+ (map pulling team)))
         winner (fn [team1 team2]
                  (if (> ^double (total-pulling team1) ^double (total-pulling team2))
@@ -188,19 +189,21 @@
                    (condition (beat [:bob :sue] [:tom :jim]))]
                   {:bob-strength (strength :bob)})))
 
-(let [dist (infer :metropolis-hastings model {:samples 25000})]
-  (plot/histogram (trace dist :bob-strength))
-  (r/mean (as-real-discrete-distribution dist :bob-strength)))
-;; => 1.8708055357028774
+(let [idist (infer :metropolis-hastings model {:samples 25000})
+      dist (as-continuous-distribution idist :bob-strength)]
+  (plot/pdf dist)
+  (r/mean dist))
+;; => 1.6957073920675654
+
 
 (defmodel model
   []
   (let [strength (memoize (fn [person]
-                            (m/abs (r/grand 1 1))))
+                            (m/max 0.01 (r/grand 1 1))))
         lazy (fn [person] (flipb m/THIRD))
         pulling (fn [person] (if (lazy person)
-                               (* 0.5 ^double (strength person))
-                               (strength person)))
+                              (* 0.5 ^double (strength person))
+                              (strength person)))
         total-pulling (fn [team] (reduce clojure.core/+ (map pulling team)))
         winner (fn [team1 team2]
                  (if (> ^double (total-pulling team1) ^double (total-pulling team2))
@@ -208,7 +211,7 @@
         beat (fn [team1 team2] (= (winner team1 team2) team1))] 
     (model-result [(condition (>= ^double (strength :mary) ^double (strength :sue)))
                    (condition (beat [:bob] [:jim]))]
-                  {:beat (beat [:bob :mary] [:jim :sue])})))
+                  (fn [] {:beat (beat [:bob :mary] [:jim :sue])}))))
 
 (let [dist (infer :metropolis-hastings model {:samples 25000})]
   (plot/frequencies (trace dist :beat)))
@@ -246,7 +249,7 @@
                    (and+ tb (flip 0.7))
                    (and+ other (flip 0.01)))
         fever (or+ (and+ cold (flip 0.3))
-                   (and+ lung-cancer (flip 0.5))
+                   (and+ stomach-flu (flip 0.5))
                    (and+ tb (flip 0.2))
                    (and+ other (flip 0.01)))
         chest-pain (or+ (and+ lung-cancer (flip 0.4))
@@ -257,13 +260,14 @@
                                  (and+ other (flip 0.01)))]
     (model-result [(condition (pos? (and+ cough fever chest-pain shortness-of-breath)))])))
 
-(let [inferred (infer :metropolis-hastings model {:samples 1e5 :max-iters 1e6})]
-  (plot/frequencies (:accepted inferred) {:sort? false}))
+(let [inferred (infer :metropolis-hastings model {:samples 1e5 :max-iters 1e7})]
+  (plot/frequencies (map #(select-keys % [:tb :lung-cancer]) (:accepted inferred)) {:sort? false}))
 
 (defmodel model 
-  [works-in-hospital (:bernoulli {:p 0.01})
-   smokes (:bernoulli {:p 0.2})]
-  (let [lung-cancer (or+ (flip 0.01) (and+ smokes (flip 0.02)))
+  []
+  (let [works-in-hospital (flip 0.01)
+        smokes (flip 0.2)
+        lung-cancer (or+ (flip 0.01) (and+ smokes (flip 0.02)))
         tb (or+ (flip 0.005) (and+ works-in-hospital (flip 0.01)))
         cold (or+ (flip 0.2) (and+ works-in-hospital (flip 0.25)))
         stomach-flu (flip 0.1)
@@ -272,19 +276,21 @@
                    (and+ lung-cancer (flip 0.3))
                    (and+ tb (flip 0.7))
                    (and+ other (flip 0.01)))
+        
         fever (or+ (and+ cold (flip 0.3))
-                   (and+ lung-cancer (flip 0.5))
+                   (and+ stomach-flu (flip 0.5))
                    (and+ tb (flip 0.2))
                    (and+ other (flip 0.01)))
+        
         chest-pain (or+ (and+ lung-cancer (flip 0.4))
                         (and+ tb (flip 0.5))
                         (and+ other (flip 0.01)))
         shortness-of-breath (or+ (and+ lung-cancer (flip 0.4))
                                  (and+ tb (flip 0.5))
                                  (and+ other (flip 0.01)))]
-    (model-result [(condition (pos? (and+ cough fever chest-pain shortness-of-breath)))]
+    (model-result [(condition (pos? (and+ cough chest-pain shortness-of-breath)))]
                   {:lung-cancer lung-cancer :tb tb})))
 
-(let [inferred (infer :metropolis-hastings model {:samples 1e5 :max-iters 1e6})]
-  (plot/frequencies (map #(select-keys % [:lung-cancer :tb]) (:accepted inferred)) {:sort? false}))
+(let [inferred (infer :metropolis-hastings model {:samples 1e5 :max-iters 1e7})]
+  (plot/frequencies (map #(select-keys % [:tb :lung-cancer]) (:accepted inferred)) {:sort? false}))
 

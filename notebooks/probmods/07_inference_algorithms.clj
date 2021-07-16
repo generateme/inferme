@@ -64,10 +64,6 @@
 (let [inferred (infer :metropolis-hastings (inf-model 0.1) {:thin 100})]
   (plot/frequencies (trace inferred :a)))
 
-;; The landscape of inference algorithms
-
-;; skipped
-
 ;; Markov chains as samplers
 
 (def states [:a :b :c :d])
@@ -130,7 +126,7 @@
   [state ^long n]
   (if (zero? n) state (recur (transition state) (dec n))))
 
-(plot/frequencies (repeatedly 1000 #(chain 3 25)))
+(plot/frequencies (repeatedly 5000 #(chain 3 250)))
 
 (defn geometric
   ^long [p]
@@ -183,8 +179,8 @@
 
 (defmodel constrained-sum-model
   []
-  (let [xs (repeatedly 10 rand)
-        target-sum (* 0.5 (count xs))]
+  (let [xs (repeatedly 10 r/drand)
+        target-sum 5.0]
     (model-result [(observe1 (distr :normal {:mu target-sum :sd 0.005}) (stats/sum xs))]
                   (map bin xs))))
 
@@ -251,6 +247,7 @@
                          (c2d/ellipse (first true-loc) (second true-loc) 20 20)
                          (c2d/set-color :blue)
                          (c2d/ellipse ex ey 20 20)))))
+
 ;; Variational Inference
 
 ;; using regular MH

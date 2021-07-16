@@ -1,7 +1,5 @@
 (ns probmods.04-dependence
   (:require [fastmath.core :as m]
-            [fastmath.random :as r]
-            [fastmath.stats :as stats]
             [inferme.core :refer :all]
             [inferme.plot :as plot]))
 
@@ -38,8 +36,8 @@
                   {:cold cold :lung-disease lung-disease})))
 
 (let [marg (infer :rejection-sampling model)]
-  (plot/frequencies (trace marg :cold))
-  (plot/frequencies (trace marg :lung-disease)))
+  (plot/frequencies (trace marg :cold) {:title "cold"})
+  (plot/frequencies (trace marg :lung-disease) {:title "lung disease"}))
 
 
 (let [c (flipb)
@@ -57,8 +55,8 @@
                                             b (if a (flipb 0.1) (flipb 0.4))]
                                         (trace-result {:b b})))) :b))
 (do
-  (plot/frequencies (b-do-a true))
-  (plot/frequencies (b-do-a false)))
+  (plot/frequencies (b-do-a true) {:title "true"})
+  (plot/frequencies (b-do-a false) {:title "false"}))
 
 (defmodel model []
   (let [smokes (flipb 0.2)
@@ -78,8 +76,8 @@
 
 
 (let [marg (infer :forward-sampling model)]
-  (plot/frequencies (trace marg :cold))
-  (plot/frequencies (trace marg :cough)))
+  (plot/frequencies (trace marg :cold) {:title "cold"})
+  (plot/frequencies (trace marg :cough) {:title "cough"}))
 
 (defmodel model []
   (let [smokes (flipb 0.2)
@@ -99,8 +97,8 @@
 
 
 (let [marg (infer :forward-sampling model)]
-  (plot/frequencies (trace marg :cold))
-  (plot/frequencies (trace marg :cough)))
+  (plot/frequencies (trace marg :cold) {:title "cold"})
+  (plot/frequencies (trace marg :cough) {:title "cough"}))
 
 ;; Statistical Dependence
 
@@ -113,8 +111,8 @@
                                         (model-result [(condition (= a a-val))] 
                                                       {:b b})))) :b))
 (do
-  (plot/frequencies (b-cond-a true))
-  (plot/frequencies (b-cond-a false)))
+  (plot/frequencies (b-cond-a true) {:title "true"})
+  (plot/frequencies (b-cond-a false) {:title "false"}))
 
 
 (defn b-cond-a
@@ -126,6 +124,6 @@
                                         (model-result [(condition (= a a-val))] 
                                                       {:b b})))) :b))
 (do
-  (plot/frequencies (b-cond-a true))
-  (plot/frequencies (b-cond-a false)))
+  (plot/frequencies (b-cond-a true) {:title "true"})
+  (plot/frequencies (b-cond-a false) {:title "false"}))
 

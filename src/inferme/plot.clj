@@ -9,9 +9,15 @@
 (set! *unchecked-math* :warn-on-boxed)
 (m/use-primitive-operators)
 
+(defn- maybe-add-title
+  [plot title]
+  (if-not title
+    plot
+    (b/add-label plot :top title {:font-size 16 :font-style :bold})))
+
 (defn frequencies
   ([data] (frequencies data {}))
-  ([data {:keys [x-label y-label sort?]
+  ([data {:keys [x-label y-label sort? title]
           :or {y-label "probability"
                x-label "data"
                sort? true}}]
@@ -23,12 +29,13 @@
                       (b/add-axes :bottom)
                       (b/add-axes :left)
                       (b/add-label :bottom x-label)
-                      (b/add-label :left y-label))
+                      (b/add-label :left y-label)
+                      (maybe-add-title title))
        (plot/show))))
 
 (defn histogram
   ([data] (histogram data {}))
-  ([data {:keys [x-label y-label bins]
+  ([data {:keys [x-label y-label bins title]
           :or {y-label "probability"
                x-label "data"}}]
    (-> (plot/xy-chart {:width 500 :height 500}
@@ -40,7 +47,8 @@
                       (b/add-axes :bottom)
                       (b/add-axes :left)
                       (b/add-label :bottom x-label)
-                      (b/add-label :left y-label))
+                      (b/add-label :left y-label)
+                      (maybe-add-title title))
        (plot/show))))
 
 

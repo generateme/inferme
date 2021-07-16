@@ -1,7 +1,6 @@
 (ns probmods.05-conditional-dependence
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
-            [fastmath.stats :as stats]
             [inferme.core :refer :all]
             [inferme.plot :as plot]))
 
@@ -17,31 +16,33 @@
 
 (defn b-cond-a
   [a-val]
-  (trace (infer :rejection-sampling (make-model
-                                     [] (let [c (flipb)
-                                              b (if c (flipb 0.5) (flipb 0.9))
-                                              a (if c (flipb 0.1) (flipb 0.4))]
-                                          (model-result [(condition c)
-                                                         (condition (= a a-val))] 
-                                                        {:b b})))) :b))
+  (-> (infer :rejection-sampling (make-model
+                                  [] (let [c (flipb)
+                                           b (if c (flipb 0.5) (flipb 0.9))
+                                           a (if c (flipb 0.1) (flipb 0.4))]
+                                       (model-result [(condition c)
+                                                      (condition (= a a-val))] 
+                                                     {:b b}))))
+      (trace :b)))
 (do
-  (plot/frequencies (b-cond-a true))
-  (plot/frequencies (b-cond-a false)))
+  (plot/frequencies (b-cond-a true) {:title "true"})
+  (plot/frequencies (b-cond-a false) {:title "false"}))
 
 ;; Explaining away
 
 (defn b-cond-a
   [a-val]
-  (trace (infer :rejection-sampling (make-model
-                                     [] (let [a (flipb)
-                                              b (flipb)
-                                              c (if (or a b) (flipb 0.9) (flipb 0.2))]
-                                          (model-result [(condition c)
-                                                         (condition (= a a-val))] 
-                                                        {:b b})))) :b))
+  (-> (infer :rejection-sampling (make-model
+                                  [] (let [a (flipb)
+                                           b (flipb)
+                                           c (if (or a b) (flipb 0.9) (flipb 0.2))]
+                                       (model-result [(condition c)
+                                                      (condition (= a a-val))] 
+                                                     {:b b}))))
+      (trace :b)))
 (do
-  (plot/frequencies (b-cond-a true))
-  (plot/frequencies (b-cond-a false)))
+  (plot/frequencies (b-cond-a true) {:title "true"})
+  (plot/frequencies (b-cond-a false) {:title "false"}))
 
 (defmodel sum-posterior-model
   []
@@ -90,9 +91,9 @@
         chest-pain (or (and lung-disease (flipb 0.2)) (flipb 0.01))
         shortness-of-breath (or (and lung-disease (flipb 0.2)) (flipb 0.01))]
     (model-result [(condition (and lung-disease
-                                   cough
-                                   chest-pain
-                                   shortness-of-breath))]
+                                   (and cough
+                                        chest-pain
+                                        shortness-of-breath)))]
                   {:smokes smokes})))
 
 (let [marg (infer :rejection-sampling model)]
@@ -107,12 +108,29 @@
         fever (or (and cold (flipb 0.3)) (flipb 0.01))
         chest-pain (or (and lung-disease (flipb 0.2)) (flipb 0.01))
         shortness-of-breath (or (and lung-disease (flipb 0.2)) (flipb 0.01))]
+    (model-result [(condition cough)]
+                  {:cold cold :lung-disease lung-disease})))
+
+(let [marg (infer :rejection-sampling model)]
+  (plot/frequencies (trace marg :cold) {:title "cold"})
+  (plot/frequencies (trace marg :lung-disease) {:title "lung disease"}))
+
+
+(defmodel model []
+  (let [smokes (flipb 0.2)
+        lung-disease (or (and smokes (flipb 0.1))
+                         (flipb 0.001))
+        cold (flipb 0.02)
+        cough (or (and cold (flipb 0.5)) (and lung-disease (flipb 0.5)) (flipb 0.001))
+        fever (or (and cold (flipb 0.3)) (flipb 0.01))
+        chest-pain (or (and lung-disease (flipb 0.2)) (flipb 0.01))
+        shortness-of-breath (or (and lung-disease (flipb 0.2)) (flipb 0.01))]
     (model-result [(condition (and cough (not cold)))]
                   {:cold cold :lung-disease lung-disease})))
 
 (let [marg (infer :rejection-sampling model)]
-  (plot/frequencies (trace marg :cold))
-  (plot/frequencies (trace marg :lung-disease)))
+  (plot/frequencies (trace marg :cold) {:title "cold"})
+  (plot/frequencies (trace marg :lung-disease) {:title "lung disease"}))
 
 (defmodel model []
   (let [smokes (flipb 0.2)
@@ -127,8 +145,8 @@
                   {:cold cold :lung-disease lung-disease})))
 
 (let [marg (infer :rejection-sampling model)]
-  (plot/frequencies (trace marg :cold))
-  (plot/frequencies (trace marg :lung-disease)))
+  (plot/frequencies (trace marg :cold) {:title "cold"})
+  (plot/frequencies (trace marg :lung-disease) {:title "lung disease"}))
 
 ;; Example: Trait Attribution
 
@@ -144,8 +162,8 @@
                    :exam-fair exam-fair})))
 
 (let [marg (infer :forward-sampling exam-posterior-model)]
-  (plot/frequencies (trace marg :does-homework))
-  (plot/frequencies (trace marg :exam-fair)))
+  (plot/frequencies (trace marg :does-homework) {:title "does homework"})
+  (plot/frequencies (trace marg :exam-fair) {:title "exam fair"}))
 
 (defmodel exam-posterior-model
   []
@@ -159,8 +177,8 @@
                    :exam-fair (exam-fair :exam1)})))
 
 (let [marg (infer :forward-sampling exam-posterior-model)]
-  (plot/frequencies (trace marg :does-homework))
-  (plot/frequencies (trace marg :exam-fair)))
+  (plot/frequencies (trace marg :does-homework) {:title "does homework"})
+  (plot/frequencies (trace marg :exam-fair) {:title "exam fair"}))
 
 ;; Example: Of Blickets and Blocking
 
@@ -188,10 +206,11 @@
   (let [luminance (* reflectance illumination)]
     (model-result [(observe1 (distr :normal {:mu luminance :sd 1}) 3)])))
 
-(let [marg (infer :metropolis-hastings reflectance-model)] 
-  (plot/histogram (trace marg :reflectance))
-  (r/mean (as-real-discrete-distribution marg :reflectance)))
-;; => 1.129697474143264
+(let [marg (infer :metropolis-hastings reflectance-model)
+      dist (as-continuous-distribution marg :reflectance)] 
+  (plot/pdf dist)
+  (r/mean dist))
+;; => 1.1387891133759487
 
 (defmodel reflectance-model
   [reflectance (distr :normal {:mu 1 :sd 1})
@@ -200,7 +219,8 @@
     (model-result [(observe1 (distr :normal {:mu luminance :sd 1}) 3)
                    (observe1 (distr :normal {:mu illumination :sd 0.1}) 0.5)])))
 
-(let [marg (infer :metropolis-hastings reflectance-model)] 
-  (plot/histogram (trace marg :reflectance))
-  (r/mean (as-real-discrete-distribution marg :reflectance)))
+(let [marg (infer :metropolis-hastings reflectance-model)
+      dist (as-continuous-distribution marg :reflectance)] 
+  (plot/pdf dist)
+  (r/mean dist))
 ;; => 2.0370220302179862
