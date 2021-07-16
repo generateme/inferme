@@ -1,4 +1,4 @@
-(defproject generateme/inferme "0.0.1-SNAPSHOT"
+(defproject generateme/inferme "0.0.2-SNAPSHOT"
   :description "MCMC based Bayesian inference toolkit"
   :url "https://github.com/generateme/inferme"
   :license {:name "The Unlicense"
