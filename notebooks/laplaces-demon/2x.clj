@@ -5,12 +5,12 @@
             [inferme.core :refer :all]
             [inferme.plot :as plot]
             [cljplot.core :as pl]
-            [clojure2d.color :as c]
             [cljplot.build :as b]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
 (m/use-primitive-operators)
+
 
 ;; 20 Binomial Logit
 
@@ -19,35 +19,38 @@
 (def dose (range 1 11))
 
 (defmodel binomial-logit
-  [beta1 (:normal {:mu 0 :sd 1000})
-   beta2 (:normal {:mu 0 :sd 1000})]
+  [beta (multi :normal 2 {:mu 0 :sd 1000})]
   (let [mu (map (fn [^double x]
-                  (m/sigmoid (+ beta1 (* beta2 x)))) dose)]
-    (model-result (map (fn [p y n]
-                         (observe1 (distr :binomial {:trials n :p p}) y)) mu deaths exposed))))
+                  (m/sigmoid (+ ^double (beta 0) (* ^double (beta 1) x)))) dose)
+        binomials (map (fn [p n] (distr :binomial {:trials n :p p})) mu exposed)]
+    (model-result (map (fn [b y] (observe1 b y)) binomials deaths)
+                  (fn [] {:yhat (mapv (fn [b] (sample b)) binomials)}))))
 
-(def res (infer :metropolis-hastings binomial-logit {:step-scale 0.03
-                                                     :initial-point [0.0 0.0]
+(def res (infer :metropolis-hastings binomial-logit {:step-scale 0.04
+                                                     :initial-point [[0.0 0.0]]
                                                      :samples 10000
                                                      :thin 100}))
 
-(def res (infer :metropolis-within-gibbs binomial-logit {:step-scale 0.05
-                                                         :initial-point [0.0 0.0]
+(def res (infer :metropolis-within-gibbs binomial-logit {:step-scale 0.1
+                                                         :initial-point [[0.0 0.0]]
                                                          :samples 10000
-                                                         :thin 50}))
+                                                         :thin 40}))
 
 
 (:acceptance-ratio res)
 (:steps res)
 
-(stats/mean (trace res :beta1))
-(stats/mean (trace res :beta2))
+(stats/mean (map first (trace res :beta)))
+(stats/mean (map second (trace res :beta)))
 
-(plot/histogram (trace res :beta1))
-(plot/histogram (trace res :beta2))
+(plot/histogram (map first (trace res :beta)))
+(plot/histogram (map second (trace res :beta)))
 
-(plot/lag (trace res :beta1))
-(plot/lag (trace res :beta2))
+(stats/mean (map #(% 1) (trace res :yhat)))
+(plot/frequencies (map #(% 1) (trace res :yhat)))
+
+(plot/lag (map first (trace res :beta)))
+(plot/lag (map second (trace res :beta)))
 
 ;; log posterior
 (plot/histogram (map :LP (:accepted res)))
@@ -61,14 +64,21 @@
   [beta1 (:normal {:mu 0 :sd 1000})
    beta2 (:normal {:mu 0 :sd 1000})]
   (let [mu (map (fn [^double x]
-                  (r/cdf r/default-normal (m/constrain (+ beta1 (* beta2 x)) -10.0 10.0))) dose)]
-    (model-result (map (fn [p y n]
-                         (observe1 (distr :binomial {:trials n :p p}) y)) mu deaths exposed))))
+                  (r/cdf r/default-normal (m/constrain (+ beta1 (* beta2 x)) -10.0 10.0))) dose)
+        binomials (map (fn [p n] (distr :binomial {:trials n :p p})) mu exposed)]
+    (model-result (map (fn [b y] (observe1 b y)) binomials deaths)
+                  (fn [] {:yhat (mapv (fn [b] (sample b)) binomials)}))))
 
 (def res (infer :metropolis-within-gibbs binomial-probit {:step-scale 0.03
                                                           :initial-point [0.0 0.0]
                                                           :samples 10000
                                                           :thin 50}))
+
+
+(def res (infer :metropolis-hastings binomial-probit {:step-scale 0.03
+                                                      :initial-point [0.0 0.0]
+                                                      :samples 10000
+                                                      :thin 50}))
 
 
 (:acceptance-ratio res)
@@ -79,6 +89,9 @@
 
 (plot/histogram (trace res :beta1))
 (plot/histogram (trace res :beta2))
+
+(stats/mean (map #(% 1) (trace res :yhat)))
+(plot/frequencies (map #(% 1) (trace res :yhat)))
 
 (plot/lag (trace res :beta1))
 (plot/lag (trace res :beta2))
@@ -97,14 +110,21 @@
    nu (:uniform-real {:lower 5.0 :upper 10.0})]
   (let [t (distr :t {:degrees-of-freedom nu})
         mu (map (fn [^double x]
-                  (r/cdf t (m/constrain (+ beta1 (* beta2 x)) -10.0 10.0))) dose)]
-    (model-result (map (fn [p y n]
-                         (observe1 (distr :binomial {:trials n :p p}) y)) mu deaths exposed))))
+                  (r/cdf t (m/constrain (+ beta1 (* beta2 x)) -10.0 10.0))) dose)
+        binomials (map (fn [p n] (distr :binomial {:trials n :p p})) mu exposed)]
+    (model-result (map (fn [b y] (observe1 b y)) binomials deaths)
+                  (fn [] {:yhat (mapv (fn [b] (sample b)) binomials)}))))
 
 (def res (infer :metropolis-within-gibbs binomial-robit {:step-scale 0.2
                                                          :initial-point [0.0 0.0 5.0]
                                                          :samples 10000
                                                          :thin 50}))
+
+
+(def res (infer :metropolis-hastings binomial-robit {:steps [0.03 0.03 0.5]
+                                                     :initial-point [0.0 0.0 5.0]
+                                                     :samples 10000
+                                                     :thin 50}))
 
 
 (:acceptance-ratio res)
@@ -117,6 +137,9 @@
 (plot/histogram (trace res :beta1))
 (plot/histogram (trace res :beta2))
 (plot/histogram (trace res :nu))
+
+(stats/mean (map #(% 6) (trace res :yhat)))
+(plot/frequencies (map #(% 6) (trace res :yhat)))
 
 (plot/lag (trace res :beta1))
 (plot/lag (trace res :beta2))
@@ -158,7 +181,8 @@
                             0.0)]
                     (+ alpha (* beta1 x) a))) xs)]
     (model-result (map (fn [m y]
-                         (observe1 (distr :normal {:mu m :sigma sigma}) y)) mu ys))))
+                         (observe1 (distr :normal {:mu m :sigma sigma}) y)) mu ys)
+                  (fn [] {:yhat (map #(r/grand %1 sigma) mu)}))))
 
 (def res (infer :metropolis-within-gibbs change-point-regression {:step-scale 2.0
                                                                   :initial-point [0.2 -0.45 0.0 0.2 0.0]
@@ -167,8 +191,17 @@
                                                                   :thin 100}))
 
 
+(def res (infer :metropolis-hastings change-point-regression {:steps [0.15 0.15 0.15 0.5 0.1]
+                                                              :initial-point [0.2 -0.45 0.0 0.2 0.0]
+                                                              :samples 10000
+                                                              :burn 5000
+                                                              :thin 100}))
+
+
 (:acceptance-ratio res)
 (:steps res)
+(:out-of-prior res)
+
 
 (stats/mean (trace res :alpha))
 (stats/mean (trace res :beta1))
@@ -205,4 +238,3 @@
                    (b/add-axes :bottom)
                    (b/add-axes :left))
       (pl/show)))
-

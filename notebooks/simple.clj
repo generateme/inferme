@@ -2,10 +2,8 @@
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
             [fastmath.stats :as stats]
-            [fastmath.vector :as v]
             [inferme.core :refer :all] 
-            [inferme.plot :as plot]
-            [inferme.jump :as jump]))
+            [inferme.plot :as plot]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
@@ -17,16 +15,16 @@
 
 (defmodel normal
   [mu (:normal {:sd 1000})]
-  (model-result [(observe (distr :normal {:mu mu}) (repeatedly 5 #(r/grand 3 1)))]))
+  (model-result [(observe (distr :normal {:mu mu}) (repeatedly 3 #(r/grand 3 1)))]))
 
-(def res (infer :metropolis-hastings normal {:steps [0.4]
-                                             ;; :kernel (jump/bactrian-kernel (distr :laplace) 0.5)
-                                             ;; :kernel (jump/bactrian-kernel (distr :normal) 0.95)
+(def res (infer :metropolis-hastings normal {:steps [1.0]
+                                             ;; :kernel (jump/bactrian-kernel (distr :laplace) 0.8)
+                                             ;; :kernel (jump/bactrian-kernel (distr :normal) 0.9)
                                              :samples 10000
                                              :max-iters 1e7
                                              :thin 20
                                              :burn 5000
-                                             ;; :initial-point [0]
+                                             ;; :initial-point [3]
                                              }))
 
 
@@ -52,4 +50,4 @@
                                                          :initial-point [0]
                                                          })))
 
-(plot/scatter (pmap #(vector % (find-step %)) (range 0.001 2 0.005)))
+(plot/scatter (pmap #(vector % (find-step %)) (range 0.0001 2 0.001)))

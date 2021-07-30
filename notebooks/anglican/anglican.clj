@@ -1,9 +1,8 @@
 (ns anglican.anglican
   (:require [fastmath.core :as m]
-            [fastmath.random :as r]
-            [fastmath.stats :as stats]
             [inferme.core :refer :all]
-            [inferme.plot :as plot]))
+            [inferme.plot :as plot]
+            [fastmath.stats :as stats]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
@@ -25,10 +24,20 @@
                  (observe (distr :bernoulli {:p p-b}) observations-b)]
                 {:p-delta (- p-a p-b)}))
 
-(def posterior (time (infer :metropolis-hastings ab-test {:samples 20000 :burn 1000 :thin 10 :step-scale 0.08})))
-(def posterior (time (infer :metropolis-within-gibbs ab-test {:samples 10000 :burn 1000 :thin 2 :step-scale 0.04})))
+(def posterior (time (infer :metropolis-hastings ab-test {:samples 30000 :burn 5000 :thin 10 :step-scale 0.02})))
+(def posterior (time (infer :metropolis-within-gibbs ab-test {:samples 10000 :burn 1000 :thin 3 :step-scale 0.04})))
+
+(def posterior (time (infer :elliptical-slice-sampling ab-test {:samples 30000})))
+
 
 (:acceptance-ratio posterior)
+(:steps posterior)
+
+(stats/mean observations-a)
+(stats/mean (trace posterior :p-a))
+
+(stats/mean observations-b)
+(stats/mean (trace posterior :p-b))
 
 (plot/histogram (trace posterior :p-a))
 (plot/histogram (trace posterior :p-b))

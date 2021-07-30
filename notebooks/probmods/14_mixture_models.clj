@@ -30,10 +30,10 @@
         obs-to-bag (memoize (fn [obs-name]
                               (rand-nth [:bag1 :bag2 :bag3])))]
     (model-result (map #(observe1 (make-bag (obs-to-bag (:name %))) (:draw %)) observed-data)
-                  {:same-bag-1-and-2 (= (obs-to-bag :obs1) (obs-to-bag :obs2))
-                   :same-bag-1-and-3 (= (obs-to-bag :obs1) (obs-to-bag :obs3))})))
+                  (fn [] {:same-bag-1-and-2 (= (obs-to-bag :obs1) (obs-to-bag :obs2))
+                         :same-bag-1-and-3 (= (obs-to-bag :obs1) (obs-to-bag :obs3))}))))
 
-(def post (infer :metropolis-hastings predictives-model {:step-scale 0.25
+(def post (infer :metropolis-hastings predictives-model {:step-scale 0.01
                                                          :burn 10000
                                                          :thin 5
                                                          :samples 30000}))
@@ -61,10 +61,10 @@
                                                {:data [:bag1 :bag2 :bag3]
                                                 :probabilities bag-mixture})))))]
     (model-result (map #(observe1 (make-bag (obs-to-bag (:name %))) (:draw %)) observed-data)
-                  {:same-bag-1-and-2 (= (obs-to-bag :obs1) (obs-to-bag :obs2))
-                   :same-bag-1-and-3 (= (obs-to-bag :obs1) (obs-to-bag :obs3))})))
+                  (fn [] {:same-bag-1-and-2 (= (obs-to-bag :obs1) (obs-to-bag :obs2))
+                         :same-bag-1-and-3 (= (obs-to-bag :obs1) (obs-to-bag :obs3))}))))
 
-(def post (infer :metropolis-hastings predictives-model {:step-scale 0.25
+(def post (infer :metropolis-hastings predictives-model {:step-scale 0.01
                                                          :burn 10000
                                                          :thin 5
                                                          :samples 30000}))
@@ -83,29 +83,31 @@
                      {:name "b0" :x -1.7103539324754713 :y -1.178368516925668} {:name "b1" :x -0.49690324128135566 :y -1.4482931166889297} {:name "b2" :x -1.0191455290951414 :y -0.4103273022785636} {:name "b3" :x -1.6127046244033036 :y -1.198330563419632} {:name "b4" :x -0.8146486481025548 :y -0.33650743701348906} {:name "b5" :x -1.2570582864922166 :y -0.7744102418371701} {:name "b6" :x -1.2635542813354101 :y -0.9202555846522052} {:name "b7" :x -1.3169953429184593 :y -0.40784942495184096} {:name "b8" :x -0.7409787028330914 :y -0.6105091049436135} {:name "b9" :x -0.7683709878962971 :y -1.0457286452094976}])
 
 (defmodel predictives-model
-  [cat-mixture (:dirichlet {:alpha [1 1]})]
-  (let [obs-to-cat (memoize (fn [obs-name] (randval (first cat-mixture) :cat1 :cat2)))
+  []
+  (let [cat-mixture (r/drand)
+        obs-to-cat (memoize (fn [obs-name] (randval cat-mixture :cat1 :cat2)))
         cat-to-mean (memoize (fn [cat] {:xmean (r/grand) :ymean (r/grand)}))]
     (model-result (mapcat (fn [{:keys [x y name]}]
                             (let [mus (cat-to-mean (obs-to-cat name))]
                               [(observe1 (distr :normal {:mu (:xmean mus) :sd 0.01}) x)
                                (observe1 (distr :normal {:mu (:ymean mus) :sd 0.01}) y)])) observed-data)
-                  {:model-result (cat-to-mean (obs-to-cat :new-obs))})))
+                  (fn [] (cat-to-mean (obs-to-cat :new-obs))))))
 
-(def post (infer :metropolis-hastings predictives-model {:steps [0.09]
-                                                         :max-iters 1e7
+(def post (infer :metropolis-hastings predictives-model {:max-iters 1e7
+                                                         :burn 0
                                                          :thin 100
-                                                         :samples 500}))
+                                                         :samples 1000}))
 
+(count (:accepted post))
 (:acceptance-ratio post)
-(count (distinct (trace post)))
+(count (distinct (trace post :ymean)))
 (:out-of-prior post)
 (:steps post)
 
 (plot/scatter (map #(v/add % [(r/grand 0.03) (r/grand 0.03)]) ;; jitter a little bit
-                   (map (juxt :xmean :ymean) (trace post))))
+                   (map vector (trace post :xmean) (trace post :ymean))))
 
-(plot/histogram (map first (trace post :cat-mixture)))
+(plot/histogram (trace post :cat-mixture))
 
 ;;
 
@@ -127,7 +129,7 @@
                                            (observe1 (distr :categorical-distribution {:data vocabulary
                                                                                        :probabilities topic}) word))) doc))) corpus))))
 
-(def post (infer :metropolis-hastings predictives-model {:step-scale 0.2
+(def post (infer :metropolis-hastings predictives-model {:step-scale 0.002
                                                          :thin 2
                                                          :samples 20000}))
 
@@ -214,9 +216,9 @@
 
 (plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals [0.2 0.3 0.1 0.4]) 0)))
 
-(def probs (sample (distr :dirichlet {:alpha [1 1 1 1]})))
+((def probs (sample (distr :dirichlet {:alpha [1 1 1 1]})))
 
-(plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals probs) 0)))
+ plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals probs) 0)))
 
 ;;
 (def beta11 (distr :beta {:alpha 1.0 :beta 1.0}))
@@ -256,10 +258,10 @@
         residuals (memoize (fn [i] (sample beta11)))
         get-bag (memoize (fn [obs-name] (my-sample-discrete residuals 0)))]
     (model-result (map #(observe1 (make-bag (get-bag (:name %))) (:draw %)) observed-data)
-                  {:same-bag-1-and-2 (= (get-bag :obs1) (get-bag :obs2))
-                   :same-bag-1-and-3 (= (get-bag :obs1) (get-bag :obs3))})))
+                  (fn [] {:same-bag-1-and-2 (= (get-bag :obs1) (get-bag :obs2))
+                         :same-bag-1-and-3 (= (get-bag :obs1) (get-bag :obs3))}))))
 
-(def post (infer :metropolis-hastings predictives-model {:step-scale 0.25
+(def post (infer :metropolis-hastings predictives-model {:step-scale 0.025
                                                          :burn 10000
                                                          :thin 5
                                                          :samples 30000}))

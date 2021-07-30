@@ -2,6 +2,7 @@
   (:refer-clojure :exclude [frequencies])
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
+            [fastmath.stats :as stats]
             [cljplot.core :as plot]
             [cljplot.build :as b]))
 
@@ -98,12 +99,14 @@
 
 (defn line
   [d]
-  (-> (plot/xy-chart {:width 500 :height 500}
-                     (b/series [:grid]
-                               [:line d])
-                     (b/add-axes :bottom)
-                     (b/add-axes :left))
-      (plot/show)))
+  (let [[_ ^double max-y] (stats/extent (map second d))]
+    (-> (plot/xy-chart {:width 500 :height 500}
+                       (b/series [:grid]
+                                 [:line d])
+                       (b/update-scale :y :domain [0 (* 1.1 max-y)])
+                       (b/add-axes :bottom)
+                       (b/add-axes :left))
+        (plot/show))))
 
 (defn lag
   [d]

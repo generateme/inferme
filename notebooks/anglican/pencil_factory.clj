@@ -14,7 +14,7 @@
   (model-result [(observe1 (distr :bernoulli {:p p}) 0)]))
 
 (def sampler (infer :metropolis-hastings run-pencil-factory {:samples 10000
-                                                             :step-scale 1.8
+                                                             :step-scale 0.5
                                                              :thin 5}))
 
 (:acceptance-ratio sampler)
@@ -54,7 +54,7 @@
    (model-result [(observe1 (distr :binomial {:trials n :p p}) k)])))
 
 (def sampler (infer :metropolis-hastings (run-pencil-factory-fn1 10 3 7 0) {:samples 10000
-                                                                            :step-scale 2
+                                                                            :step-scale 0.3
                                                                             :thin 2}))
 
 (:acceptance-ratio sampler)

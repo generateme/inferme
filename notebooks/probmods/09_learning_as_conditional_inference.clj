@@ -208,6 +208,9 @@
                        (let [e (or (and C (flipb cp)) (flipb b))]
                          (condition (= E e)))) observed-data)))
 
-(def casual-power-post (infer :metropolis-hastings casual-power-model {:samples 10000}))
+(def casual-power-post (infer :metropolis-hastings casual-power-model {:samples 10000
+                                                                       :step-scale 0.1}))
+
+(:acceptance-ratio casual-power-post)
 
 (plot/histogram (trace casual-power-post :cp))

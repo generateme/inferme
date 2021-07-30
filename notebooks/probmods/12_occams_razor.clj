@@ -40,7 +40,7 @@
                (model-result [(observe (if (== 1.0 hypothesis) big-distr small-distr) data)]))]
     (stats/mean (trace (infer :rejection-sampling model) :hypothesis))))
 
-(def prob-big (pmap #(hypothesis-posterior (take % full-data)) data-sizes))
+(def prob-big (map #(hypothesis-posterior (take % full-data)) data-sizes))
 
 (plot/line (map vector data-sizes prob-big))
 
@@ -57,22 +57,23 @@
 
 (defmodel model
   [hypothesis (:bernoulli)]
-  (model-result [(observe (if (== 1.0 hypothesis) A B) observed-data)]))
+  (model-result [(observe (if (== 1.0 hypothesis) A B) observed-data)]
+                (if (zero? hypothesis) :B :A)))
 
-(def posterior (infer :metropolis-hastings model {:step-scale 1.5}))
+(def posterior (infer :metropolis-hastings model {:step-scale 1}))
 
 (:acceptance-ratio posterior)
 
 ;; 1.0 - A
 ;; 0.0 - B
-(plot/frequencies (trace posterior :hypothesis))
+(plot/frequencies (trace posterior))
 
 ;; Example: Fair or unfair coin?
 
 (def observed-data [:h :h :t :h :t :h :h :h :t :h])
-;; (def observed-data (repeat 10 :h))
-;; (def observed-data (repeat 25 :h))
-;; (def observed-data (repeatedly 54 #(if (flipb 0.85) :h :t)))
+(def observed-data (repeat 10 :h))
+(def observed-data (repeat 25 :h))
+(def observed-data (repeatedly 54 #(if (flipb 0.85) :h :t)))
 (def fair-prior 0.999)
 (def pseudo-counts (distr :beta {:alpha 1 :beta 1}))
 
@@ -124,7 +125,7 @@
                     {:weight coin-weight
                      :prior (if (flipb fair-prior) 0.5 (r/sample pseudo-counts))}))))
 
-(def results (infer :metropolis-hastings model {:samples 1000000 :step-scale 2}))
+(def results (infer :metropolis-hastings model {:samples 1000000 :step-scale 1}))
 
 (:acceptance-ratio results)
 

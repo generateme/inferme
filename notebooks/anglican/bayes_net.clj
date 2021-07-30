@@ -1,6 +1,7 @@
 (ns anglican.bayes-net
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
+            [fastmath.protocols :as prot]
             [fastmath.stats :as stats]
             [inferme.core :refer :all]
             [inferme.plot :as plot]))
@@ -20,18 +21,22 @@
                     (observe1 wet-grass-dist (if wet-grass 1.0 0.0))]
                    {:is-raining is-raining}))))
 
-(def result (infer :metropolis-hastings (sprinkler-bayes-net-fn true true) {:step-scale 2}))
+(def result (infer :metropolis-hastings (sprinkler-bayes-net-fn true true) {:samples 50000
+                                                                            :step-scale 0.5}))
 
 (:acceptance-ratio result)
+(:out-of-prior result)
 
 (plot/frequencies (trace result :is-raining))
+(plot/frequencies (map int (trace result :is-cloudy)))
+(plot/histogram (trace result :is-cloudy))
 
 ;;
 
 (defmethod r/distribution :dirac
   [_ {:keys [x]
       :or {x 0.0}}]
-  (reify r/DistributionProto
+  (reify prot/DistributionProto
     (lpdf [_ v] (if (= v x) 0.0 ##-Inf))
     (sample [_] x)
     (continuous? [_] true)))
@@ -50,8 +55,9 @@
                   {:is-raining is-raining})))
 
 
-(def result (infer :metropolis-hastings sprinkler-bayes-net))
+(def result (infer :metropolis-hastings sprinkler-bayes-net {:step-scale 0.5}))
 
 (:acceptance-ratio result)
+(:out-of-prior result)
 
 (plot/frequencies (trace result :is-raining))

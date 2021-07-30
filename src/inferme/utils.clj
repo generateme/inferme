@@ -1,6 +1,7 @@
 (ns inferme.utils
   (:require [fastmath.core :as m]
-            [fastmath.vector :as v])
+            [fastmath.vector :as v]
+            [clojure.string :as str])
   (:import [org.apache.commons.math3.linear Array2DRowRealMatrix CholeskyDecomposition]))
 
 (set! *warn-on-reflection* true)
@@ -18,11 +19,18 @@
        m/double-double-array->seq
        (map vec)))
 
-(def covar [[0.018583700 -0.002682908]
-            [-0.002682908  0.0006236064]])
+(defn multi?
+  [d]
+  (or (str/starts-with? (name d) "multi-")
+      (= d :dirichlet)))
 
-(def chol (cholesky covar))
+(comment
+  (def covar [[0.018583700 -0.002682908]
+              [-0.002682908  0.0006236064]])
 
-(def nn [-0.3890267 -0.5978324])
+  (def chol (cholesky covar))
 
-(mapv #(v/dot % nn) chol)
+  (def nn [-0.3890267 -0.5978324])
+
+  (mapv #(v/dot % nn) chol)
+  )

@@ -2,15 +2,17 @@
   (:require [fastmath.core :as m]
             [fastmath.random :as r]
             [fastmath.vector :as v]
-            [fastmath.protocols :as prot]
-            [inferme.jump :as jump]))
+            [inferme.jump :as jump]
+            [inferme.multi]
+            [inferme.utils :as utils]
+            [clojure.walk :as walk]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
 (m/use-primitive-operators)
 
-(deftype ModelResult [ll result])
-(deftype ModelResultFinal [^double ll ^double lp ^clojure.lang.PersistentVector params parameters-map result])
+(defrecord ModelResult [ll result])
+(defrecord ModelResultFinal [^double ll ^double lp ^clojure.lang.PersistentVector params parameters-map result])
 
 (defmacro model-result
   "Result creator returned by model consisting list of log likelihoods and optional model value."
@@ -36,66 +38,148 @@
 
 ;;
 
-(defn- ^:private multidimensional? [d] (satisfies? prot/MultivariateDistributionProto d))
+#_(defn- ^:private multidimensional? [d] (satisfies? prot/MultivariateDistributionProto d))
 
-(defn- emit-let 
-  [ppriors model-input]
-  (first
-   (reduce (fn [[buff ^int id] {:keys [multidimensional? continuous? prior-param-symbol ^int param-cnt]}]
-             (let [symbols
-                   (cond
-                     multidimensional? [prior-param-symbol `(subvec ~model-input ~id ~(+ id param-cnt))]
-                     (not continuous?) [prior-param-symbol `(m/floor (.nth ~model-input ~id))]
-                     :else [prior-param-symbol `(double (.nth ~model-input ~id))])]
-               [(concat buff symbols) (+ id param-cnt)]))
-           [[] (int 0)] ppriors)))
+#_(defn- emit-let 
+    [ppriors model-input]
+    (first
+     (reduce (fn [[buff ^int id] {:keys [multidimensional? continuous? prior-param-symbol ^int param-cnt]}]
+               (let [symbols
+                     (cond
+                       multidimensional? [prior-param-symbol `(subvec ~model-input ~id ~(+ id param-cnt))]
+                       (not continuous?) [prior-param-symbol `(m/floor (.nth ~model-input ~id))]
+                       :else [prior-param-symbol `(double (.nth ~model-input ~id))])]
+                 [(concat buff symbols) (+ id param-cnt)]))
+             [[] (int 0)] ppriors)))
 
-(defn- emit-sampling-priors
-  [ppriors]
-  (let [lst (map (fn [{:keys [prior-distr-symbol]}]
-                   `(r/sample ~prior-distr-symbol)) ppriors)]
-    (if (some :multidimensional? ppriors)
-      `(vec (flatten [~@lst]))
-      `[~@lst])))
+#_(defn- emit-sampling-priors
+    [ppriors]
+    (let [lst (map (fn [{:keys [prior-distr-symbol]}]
+                     `(r/sample ~prior-distr-symbol)) ppriors)]
+      (if (some :multidimensional? ppriors)
+        `(vec (flatten [~@lst]))
+        `[~@lst])))
+
+#_(defn- preprocess-prior
+    [[p d]]
+    (let [[fixed safe-eval?] (if (and (list? d)
+                                      (keyword? (first d)))
+                               [(conj d 'r/distribution) false]
+                               [d true]) 
+          dstr (eval (if (or safe-eval?
+                             (not (map? (last fixed)))) fixed (butlast fixed)))
+          multi? (multidimensional? dstr)
+          ^int dims (if (and multi? (not safe-eval?) (map? (last fixed)))
+                      (if-let [ds (:dimensions (last fixed))]
+                        ds
+                        (r/dimensions (eval fixed)))
+                      (r/dimensions dstr))
+          distr-id (r/distribution-id dstr)]
+      {:distr-id distr-id
+       :continuous? (r/continuous? dstr)
+       :multidimensional? multi?
+       :dimensions dims
+       :param-cnt dims
+       :prior-param-symbol p
+       :prior-distr-symbol (symbol (str "prior-" p))
+       :distribution fixed}))
+
+#_(defn- preprocess-priors
+    [priors params-sym]
+    (let [ppriors (map preprocess-prior (partition 2 priors))]
+      {:let (emit-let ppriors params-sym)
+       :prior-calc `(+ 0.0 ~@(map (fn [{:keys [prior-distr-symbol prior-param-symbol]}]
+                                    `(r/observe1 ~prior-distr-symbol ~prior-param-symbol)) ppriors))
+       :parameters-map `(hash-map ~@(mapcat (fn [{:keys [prior-param-symbol]}]
+                                              [(keyword prior-param-symbol)
+                                               prior-param-symbol]) ppriors))
+       :prior-distributions `(vector ~@(map :prior-distr-symbol ppriors))
+       :prior-distributions-let (mapcat (juxt :prior-distr-symbol :distribution) ppriors)
+       :prior-names `(vector ~@(map (comp keyword :prior-param-symbol) ppriors))
+       :sample-priors (emit-sampling-priors ppriors)
+       :param-cnt `[~@(map :param-cnt ppriors)]}))
+
+(defn- add-tag
+  [s d]
+  (if (utils/multi? d)
+    (with-meta s {:tag 'clojure.lang.PersistentVector})
+    (with-meta s {:tag 'double})))
+
+(defn- make-prior-symbol
+  [s]
+  (symbol (str "prior-" s)))
+
+(defn- analyze-deps
+  "Find if prior do have back reference to any existing prior"
+  [params symbols-set]
+  (if (seqable? params)
+    (mapcat (fn [v]
+              (cond
+                (seqable? v) (analyze-deps v symbols-set)
+                (symbol? v) [(symbols-set v)]
+                :else [false])) params)
+    [(symbol? params)]))
+
+(defn- maybe-fix-deps
+  [d symbols-set deps?]
+  (if-not deps?
+    d
+    (let [[params & r] (reverse d)]
+      (->> (walk/postwalk (fn [v]
+                            (if (symbols-set v)
+                              `(r/sample ~(make-prior-symbol v))
+                              v)) params)
+           (conj r)
+           (reverse)))))
 
 (defn- preprocess-prior
-  [[p d]]
-  (let [[fixed safe-eval?] (if (and (list? d)
-                                    (keyword? (first d)))
-                             [(conj d 'r/distribution) false]
-                             [d true]) 
-        dstr (eval (if (or safe-eval?
-                           (not (map? (last fixed)))) fixed (butlast fixed)))
-        multi? (multidimensional? dstr)
-        ^int dims (if (and multi? (not safe-eval?) (map? (last fixed)))
-                    (if-let [ds (:dimensions (last fixed))]
-                      ds
-                      (r/dimensions (eval fixed)))
-                    (r/dimensions dstr))
-        distr-id (r/distribution-id dstr)]
-    {:distr-id distr-id
-     :continuous? (r/continuous? dstr)
-     :multidimensional? multi?
-     :dimensions dims
-     :param-cnt dims
-     :prior-param-symbol p
-     :prior-distr-symbol (symbol (str "prior-" p))
-     :distribution fixed}))
+  [s d symbols-set]
+  (let [deps? (some identity (analyze-deps (last d) symbols-set))
+        [s' d'] (if (list? d)
+                  (let [[a b] d]
+                    (cond
+                      (keyword? a) [(add-tag s a) (conj d `r/distribution)] ;; (:normal ...)
+                      (and (= (name a) "distribution")
+                           (keyword? b)) [(add-tag s b) d] ;; (r/distribution :normal ...)
+                      :else [s d]))
+                  [s d])]
+    {:symbol s'
+     :prior-symbol (make-prior-symbol s')
+     :distribution-sampled-deps (maybe-fix-deps d' symbols-set deps?)
+     :distribution d'
+     :deps? deps?}))
 
 (defn- preprocess-priors
   [priors params-sym]
-  (let [ppriors (map preprocess-prior (partition 2 priors))]
-    {:let (emit-let ppriors params-sym)
-     :prior-calc `(+ 0.0 ~@(map (fn [{:keys [prior-distr-symbol prior-param-symbol]}]
-                                  `(r/observe1 ~prior-distr-symbol ~prior-param-symbol)) ppriors))
-     :parameters-map `(hash-map ~@(mapcat (fn [{:keys [prior-param-symbol]}]
-                                            [(keyword prior-param-symbol)
-                                             prior-param-symbol]) ppriors))
-     :prior-distributions `(vector ~@(map :prior-distr-symbol ppriors))
-     :prior-distributions-let (mapcat (juxt :prior-distr-symbol :distribution) ppriors)
-     :prior-names `(vector ~@(map (comp keyword :prior-param-symbol) ppriors))
-     :sample-priors (emit-sampling-priors ppriors)
-     :param-cnt `[~@(map :param-cnt ppriors)]}))
+  (let [ppriors (first (reduce (fn [[curr symbols] [s d]]
+                                 [(conj curr (preprocess-prior s d symbols))
+                                  (conj symbols s)]) [[] #{}] (partition 2 priors)))
+        distrs (map :distribution-sampled-deps ppriors)
+        param-names (map :symbol ppriors)
+        param-names-k (map keyword param-names)
+        distr-names (map :prior-symbol ppriors)]
+    {:parameters-let (mapcat (fn [idx p] [p `(.nth ~params-sym ~idx)]) (range) param-names)
+     :parameter-names param-names
+     :parameter-names-k param-names-k
+     :parameters-map (zipmap param-names-k param-names)
+     :sample-priors-let `[~@(interleave param-names (map (fn [{:keys [prior-symbol distribution deps?]}]
+                                                           (if-not deps?
+                                                             `(r/sample ~prior-symbol)
+                                                             `(r/sample ~distribution))) ppriors))]
+     :distributions-let `[~@(interleave distr-names distrs)]
+     :distributions-refresh-let `[~@(mapcat (juxt :prior-symbol :distribution) (filter :deps? ppriors))]
+     :distribution-names distr-names
+     :calc-priors `(+ 0.0 ~@(map (fn [d p]
+                                   `(r/lpdf ~d ~p)) distr-names param-names))}))
+
+(:sample-priors-let (preprocess-priors '[a (:dirichlet)
+                                         b (:exponential)
+                                         c (:normal {:mu b})] 'params))
+
+
+
+
+
 
 (defmacro make-model
   "Create model."
@@ -104,18 +188,20 @@
   (assert (even? (count priors)) "Odd number of elements in priors.")
   (let [params (with-meta (symbol "params") {:tag 'clojure.lang.PersistentVector})
         preprocessed-priors (preprocess-priors priors params)]
-    `(let [~@(:prior-distributions-let preprocessed-priors)
-           ~'prior-distributions ~(:prior-distributions preprocessed-priors)
-           ~'prior-names ~(:prior-names preprocessed-priors)]
-       {:parameter-names ~'prior-names
-        :prior-distributions ~'prior-distributions
-        :parameter-count ~(:param-cnt preprocessed-priors)
+    `(let [~@(:distributions-let preprocessed-priors)
+           ~'distributions [~@(:distribution-names preprocessed-priors)]]
+       {:distributions ~'distributions
+        :distribution-dims (map r/dimensions ~'distributions)
+        :distribution-names (map r/distribution-id ~'distributions)
+        :parameter-names [~@(:parameter-names-k preprocessed-priors)]
         :model (fn local-model#
-                 ([] ~(:sample-priors preprocessed-priors))
+                 ([] (let [~@(:sample-priors-let preprocessed-priors)]
+                       [~@(:parameter-names preprocessed-priors)]))
                  ([~params] (local-model# ~params true))
                  ([~params with-prior?#]
-                  (let [~@(:let preprocessed-priors)
-                        ~'prior (double (if with-prior?# ~(:prior-calc preprocessed-priors) 0.0))]
+                  (let [~@(:parameters-let preprocessed-priors)
+                        ~@(:distributions-refresh-let preprocessed-priors)
+                        ~'prior (if with-prior?# ~(:calc-priors preprocessed-priors) 0.0)]
                     (when-not (and with-prior?# (m/invalid-double? ~'prior)) ;; if priors are invalid, return nil and avoid further computation
                       (let [~'parameters-map ~(:parameters-map preprocessed-priors)
                             ^ModelResult mr# (or (do ~@r) (model-result))
@@ -126,6 +212,37 @@
                                            ~params
                                            ~'parameters-map
                                            (.result mr#)))))))})))
+
+
+#_(defmacro make-model
+    "Create model."
+    [priors & r]
+    (assert (vector? priors) "Priors should be a vector!")
+    (assert (even? (count priors)) "Odd number of elements in priors.")
+    (let [params (with-meta (symbol "params") {:tag 'clojure.lang.PersistentVector})
+          preprocessed-priors (preprocess-priors priors params)]
+      `(let [~@(:prior-distributions-let preprocessed-priors)
+             ~'prior-distributions ~(:prior-distributions preprocessed-priors)
+             ~'prior-names ~(:prior-names preprocessed-priors)]
+         {:parameter-names ~'prior-names
+          :prior-distributions ~'prior-distributions
+          :parameter-count ~(:param-cnt preprocessed-priors)
+          :model (fn local-model#
+                   ([] ~(:sample-priors preprocessed-priors))
+                   ([~params] (local-model# ~params true))
+                   ([~params with-prior?#]
+                    (let [~@(:let preprocessed-priors)
+                          ~'prior (double (if with-prior?# ~(:prior-calc preprocessed-priors) 0.0))]
+                      (when-not (and with-prior?# (m/invalid-double? ~'prior)) ;; if priors are invalid, return nil and avoid further computation
+                        (let [~'parameters-map ~(:parameters-map preprocessed-priors)
+                              ^ModelResult mr# (or (do ~@r) (model-result))
+                              llsum# (double (reduce safe-sum 0.0 (.ll mr#)))
+                              lpsum# (+ llsum# ~'prior)]
+                          (ModelResultFinal. llsum#
+                                             lpsum#
+                                             ~params
+                                             ~'parameters-map
+                                             (.result mr#)))))))})))
 
 
 (defmacro defmodel
@@ -205,8 +322,8 @@
 (declare best-initial-point)
 
 (defn initial-point-calc
-  ([initial-point model] (initial-point-calc initial-point model 50))
-  ([initial-point model search-size]
+  ([model initial-point] (initial-point-calc model initial-point 50))
+  ([model initial-point search-size]
    (let [m (:model model)]
      (if-let [res (and initial-point (m initial-point))]
        res
@@ -218,24 +335,25 @@
 (defmethod infer :metropolis-hastings
   ([_ model] (infer :metropolis-hastings model {}))
   ([_ model {:keys [^int max-iters ^int samples ^double max-time ^int burn
-                    initial-point steps ^double step-scale ^int thin kernel]
+                    initial-point ^long initial-point-search-size steps step-scale ^int thin kernel]
              :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
-                  step-scale 1.0 thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
+                  initial-point-search-size 50
+                  thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
    (let [finalize? (finalizer max-iters samples max-time)
-         [step-vals step-fn] (kernel steps step-scale model)
+         [step-vals step-fns] (kernel model steps step-scale)
          m (:model model)]
      (loop [iter (int 0)
             accepted (transient [])
             accepted-cnt (int 0)
             out-of-prior (int 0)
-            ^ModelResultFinal mr (initial-point-calc initial-point model)]
+            ^ModelResultFinal mr (initial-point-calc model initial-point initial-point-search-size)]
        (if-let [finalized (finalize? accepted iter)]
          (assoc finalized
                 :acceptance-ratio (/ accepted-cnt (double iter))
                 :out-of-prior out-of-prior
                 :steps step-vals)
          
-         (if-let [^ModelResultFinal new-mr (m (step-fn (.params mr)))] ;; make step and call model
+         (if-let [^ModelResultFinal new-mr (m (mapv (fn [k v] (k v)) step-fns (.params mr)))] ;; make step and call model
            (let [reject? (or (m/invalid-double? (.lp new-mr)) ;; reject condition
                              (let [diff (- (.lp new-mr) (.lp mr))]
                                (and (neg? diff) (> (m/log (r/drand)) diff))))
@@ -255,12 +373,13 @@
 (defmethod infer :metropolis-within-gibbs
   ([_ model] (infer :metropolis-within-gibbs model {}))
   ([_ model {:keys [^int max-iters ^int samples ^double max-time ^int burn
-                    initial-point steps ^double step-scale ^int thin kernel]
+                    initial-point ^long initial-point-search-size steps step-scale ^int thin kernel]
              :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
-                  step-scale 1.0 thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
+                  initial-point-search-size 50
+                  thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
    (let [finalize? (finalizer max-iters samples max-time)
-         ^ModelResultFinal init-mr (initial-point-calc initial-point model)
-         [step-vals step-fn] (kernel steps step-scale model)
+         [step-vals step-fns] (kernel model steps step-scale)
+         ^ModelResultFinal init-mr (initial-point-calc model initial-point initial-point-search-size)
          m (:model model)
          param-cnt (count (.params init-mr))]
      (loop [iter (int 0)
@@ -271,7 +390,7 @@
          (assoc finalized
                 :acceptance-ratio (/ accepted-cnt (* param-cnt (double iter)))
                 :steps step-vals)
-         (let [^clojure.lang.PersistentVector new-params (step-fn (.params mr))
+         (let [^clojure.lang.PersistentVector new-params (mapv (fn [k v] (k v)) step-fns (.params mr))
                [^int inner-accepted
                 ^ModelResultFinal curr-mr] (loop [inner-accepted (int 0)
                                                   positions (shuffle (range param-cnt)) ;; iterate through parameters and update them one by one
@@ -300,10 +419,11 @@
 (defmethod infer :elliptical-slice-sampling
   ([_ model] (infer :elliptical-slice-sampling model {}))
   ([_ model {:keys [^int samples ^double max-time ^int burn
+                    initial-point-search-size
                     initial-point covariances ^int thin]
-             :or {samples 10000 max-time 30.0 burn 500 thin 1}}]
+             :or {samples 10000 max-time 30.0 burn 500 thin 1 initial-point-search-size 50}}]
    (let [finalize? (finalizer (inc (+ (* thin samples) burn)) samples max-time)
-         ^ModelResultFinal init-mr (initial-point-calc initial-point model)
+         ^ModelResultFinal init-mr (initial-point-calc model initial-point initial-point-search-size)
          param-cnt (count (.params init-mr))
          m (:model model)
          proposal (r/distribution :multi-normal {:means (repeat param-cnt 0.0)
@@ -336,6 +456,16 @@
                     (conj! accepted (process-result curr-mr))
                     accepted)
                   curr-mr)))))))
+
+;;
+
+(defmacro multi
+  ([distribution dimensions]
+   `(multi ~distribution ~dimensions nil))
+  ([distribution dimensions params]
+   `(r/distribution :multi {:dims ~dimensions
+                            :distribution ~distribution
+                            :parameters ~params})))
 
 (defmacro and+
   ([] `1)
@@ -393,13 +523,15 @@
      (process-result mr))))
 
 (defn best-result
-  [inference-result]
-  (first (sort-by :LP clojure.core/> (:accepted inference-result))))
+  ([inference-result]
+   (first (sort-by :LP clojure.core/> (:accepted inference-result))))
+  ([inference-result selector]
+   ((best-result inference-result) selector)))
 
 (defn best-initial-point
   ([model inference-result]
    (when-let [pnames (seq (:parameter-names model))] 
-     (vec (flatten ((apply juxt pnames) (best-result inference-result))))))
+     (vec ((apply juxt pnames) (best-result inference-result)))))
   ([model]
    (best-initial-point model (infer :forward-sampling model))))
 
@@ -429,4 +561,3 @@
   [inferred & r]
   (map (apply juxt (map #(fn [v]
                            (v %)) r)) (:accepted inferred)))
-
