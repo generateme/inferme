@@ -81,7 +81,7 @@
 (plot/lag (map first (trace res :beta1)))
 
 
-;;;;
+;;;; ANCOVA
 
 (def N 100)
 (def J 5)
