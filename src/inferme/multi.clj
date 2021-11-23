@@ -4,9 +4,18 @@
             [fastmath.protocols :as prot]
             [fastmath.core :as m]))
 
+(defn- process-parameters
+  [parameters]
+  (when (seq parameters)
+    (map #(zipmap (keys parameters) %) (apply map vector (vals parameters)))))
+
 (defmethod r/distribution :multi
-  [_ {:keys [dims distribution parameters] :as all}]
-  (let [distrs (vec (repeat dims (r/distribution distribution parameters)))
+  [_ {:keys [dims distribution parameters multiple-parameters?] :as all}]
+  (let [distrs (vec (if multiple-parameters?
+                      (let [processed-parameters (process-parameters parameters)]
+                        (assert (and processed-parameters (= dims (count processed-parameters))) "Number of parameter(s) values should be equal to the dimentionality.")
+                        (map (partial r/distribution distribution) processed-parameters))
+                      (repeat dims (r/distribution distribution parameters))))
         distr-id (keyword (str "multi-iid-" (name distribution)))
         m (delay (mapv prot/mean distrs))
         cv (delay (mapv prot/variance distrs))

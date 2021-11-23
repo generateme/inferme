@@ -5,7 +5,8 @@
             [inferme.jump :as jump]
             [inferme.multi]
             [inferme.utils :as utils]
-            [clojure.walk :as walk]))
+            [clojure.walk :as walk]
+            [fastmath.stats :as stats]))
 
 (set! *warn-on-reflection* true)
 (set! *unchecked-math* :warn-on-boxed)
@@ -172,9 +173,9 @@
      :calc-priors `(+ 0.0 ~@(map (fn [d p]
                                    `(r/lpdf ~d ~p)) distr-names param-names))}))
 
-(:sample-priors-let (preprocess-priors '[a (:dirichlet)
-                                         b (:exponential)
-                                         c (:normal {:mu b})] 'params))
+#_(:sample-priors-let (preprocess-priors '[a (:dirichlet)
+                                           b (:exponential)
+                                           c (:normal {:mu b})] 'params))
 
 
 
@@ -414,6 +415,113 @@
 
            (recur (inc iter) new-accepted (+ accepted-cnt inner-accepted) curr-mr)))))))
 
+(def data (repeatedly 1000 #(r/grand 2 0.2)))
+
+(defmodel tmodel
+  [mu (:normal {:sd 10})
+   sd (:uniform-real {:lower 0.0001})]
+  (model-result [(observe (distr :normal {:mu mu :sd sd}) data)]))
+
+(defn partial-derivative
+  ([model params] (partial-derivative model params 1.0e-6))
+  ([model ^clojure.lang.PersistentVector params ^double interval]
+   (let [^double lp (:lp (model params))]
+     #_     (println {:params params :lp lp})
+     (mapv (fn [^long id]
+             (let [new-params (assoc params id (+ ^double (.nth params id) interval))]
+               #_      (println {:new-params new-params :lp (:lp (model new-params))
+                                 :diff (- ^double (:lp (model new-params)) lp)})
+               (/ (- ^double (:lp (model new-params)) lp) interval)))
+           (range (count params))))))
+
+(let [model tmodel
+      m (:model model)
+      steps nil
+      step-scale nil
+      kernel (jump/regular-kernel (r/distribution :normal))
+      [step-vals step-fns] (kernel model steps step-scale)
+      ^ModelResultFinal init-mr (initial-point-calc model [1.0 0.2]  10)
+      Mo0 init-mr
+      parm (.params init-mr)
+      epsilon 1.0e-3
+      gr0 (partial-derivative (:model tmodel) parm)
+      mr init-mr
+      prop parm
+      momentum0 (mapv (fn [k v] (k v)) step-fns [0.0 0.0])
+      kinetic0 (* 0.5 (v/dot momentum0 momentum0))
+      momentum1 (v/add momentum0 (v/mult gr0 (* 0.5 epsilon)))
+      Mo01 Mo0
+      prop (v/add prop (v/mult momentum1 epsilon))
+      ^ModelResultFinal Mo1 (m prop)
+      gr1 (partial-derivative (:model tmodel) (.params Mo1))
+      momentum1 (v/sub (v/add momentum1 (v/mult gr1 (* 0.5 epsilon))))
+      kinetic1 (* 0.5 (v/dot momentum1 momentum1))
+      H0 (+ kinetic0 (- (.lp Mo0)))
+      H1 (+ kinetic1 (- (.lp Mo1)))
+      delta (- H1 H0)
+      alpha (min 1.0 (m/exp (- delta)))]
+  [momentum0 momentum1 gr0 gr1 (.params init-mr) (.params Mo1) kinetic0 kinetic1 alpha])
+
+
+(call tmodel [0.0 0.01])
+
+(def res (infer :metropolis-hastings tmodel {:steps [0.01 0.01]}))
+
+(:acceptance-ratio res)
+(:steps res)
+
+(plot/histogram (trace res :sd))
+(plot/histogram (trace res :mu))
+
+
+(call tmodel)
+
+;;
+
+#_(defmethod infer :hamiltonian-monte-carlo
+    ([_ model] (infer :hamiltonian-monte-carlo model {}))
+    ([_ model {:keys [^int max-iters ^int samples ^double max-time ^int burn
+                      initial-point ^long initial-point-search-size steps step-scale ^int thin kernel]
+               :or {max-iters 100000 samples 10000 max-time 30.0 burn 500
+                    initial-point-search-size 50
+                    thin 1 kernel (jump/regular-kernel (r/distribution :normal))}}]
+     (let [finalize? (finalizer max-iters samples max-time)
+           [step-vals step-fns] (kernel model steps step-scale)
+           ^ModelResultFinal init-mr (initial-point-calc model initial-point initial-point-search-size)
+           m (:model model)
+           param-cnt (count (.params init-mr))]
+       (loop [iter (int 0)
+              accepted (transient [])
+              accepted-cnt (int 0)
+              ^ModelResultFinal mr init-mr]
+         (if-let [finalized (finalize? accepted iter)] 
+           (assoc finalized
+                  :acceptance-ratio (/ accepted-cnt (* param-cnt (double iter)))
+                  :steps step-vals)
+           (let [^clojure.lang.PersistentVector new-params (mapv (fn [k v] (k v)) step-fns (.params mr))
+                 [^int inner-accepted
+                  ^ModelResultFinal curr-mr] (loop [inner-accepted (int 0)
+                                                    positions (shuffle (range param-cnt)) ;; iterate through parameters and update them one by one
+                                                    ^ModelResultFinal curr-mr mr]
+                                               (if-not (seq positions)
+                                                 [inner-accepted curr-mr]
+                                                 (let [pos (first positions)
+                                                       ^ModelResultFinal new-mr (m (assoc (.params curr-mr) pos
+                                                                                          (.nth new-params pos)))]
+                                                   (if-not new-mr
+                                                     (recur inner-accepted (rest positions) curr-mr)
+                                                     (if (and (m/valid-double? (.lp new-mr))
+                                                              (let [diff (- (.lp new-mr) (.lp curr-mr))]
+                                                                (or (>= diff 0.0)
+                                                                    (< (m/log (r/drand)) diff))))
+                                                       (recur (inc inner-accepted) (rest positions) new-mr)
+                                                       (recur inner-accepted (rest positions) curr-mr))))))
+                 new-accepted (if (and (>= iter burn) (zero? (mod iter thin)))
+                                (conj! accepted (process-result curr-mr))
+                                accepted)]
+
+             (recur (inc iter) new-accepted (+ accepted-cnt inner-accepted) curr-mr)))))))
+
 ;;
 
 (defmethod infer :elliptical-slice-sampling
@@ -467,6 +575,16 @@
                             :distribution ~distribution
                             :parameters ~params})))
 
+(defmacro multi*
+  ([distribution dimensions]
+   `(multi ~distribution ~dimensions nil))
+  ([distribution dimensions params]
+   `(r/distribution :multi {:dims ~dimensions
+                            :distribution ~distribution
+                            :parameters ~params
+                            :multiple-parameters? true})))
+
+
 (defmacro and+
   ([] `1)
   ([a] `~a)
@@ -480,7 +598,9 @@
 (defmacro distr [& r] `(r/distribution ~@r))
 (defmacro flip [& r] `(r/flip ~@r))
 (defmacro flipb [& r] `(r/flipb ~@r))
-(defmacro sample [& r] `(r/sample ~@r))
+(defmacro sample
+  ([distribution] `(r/sample ~distribution))
+  ([n distribution] `(r/->seq ~distribution ~n)))
 (defmacro randval [& r] `(r/randval ~@r))
 
 (defmacro condition
@@ -555,9 +675,35 @@
   ([inferred]
    (trace inferred :model-result))
   ([inferred selector]
-   (map #(% selector) (:accepted inferred))))
+   (map selector (:accepted inferred)))
+  ([inferred selector pos]
+   (map #(nth (selector %) pos) (:accepted inferred))))
 
 (defn traces
   [inferred & r]
   (map (apply juxt (map #(fn [v]
                            (v %)) r)) (:accepted inferred)))
+
+;; stats
+
+(defn stats
+  [inferred & trace-params]
+  (let [t (-> (apply trace inferred trace-params)
+              (m/seq->double-array))
+        p (stats/percentiles t [1.0 2.5 5.0
+                                25.0 50.0 75.0
+                                95.0 97.5 99.0])]
+    {:size (alength t)
+     :mean (stats/mean t)
+     :stddev (stats/stddev t)
+     :mode (stats/mode t)
+     :median (p 4)
+     :percentiles (zipmap [1 2.5 5 :Q1 :median :Q3 95 97.5 99] p)
+     :min (smile.math.MathEx/min t)
+     :max (smile.math.MathEx/max t)
+     :lag (let [acf (stats/acf-ci t 50)]
+            (->> (map (fn [id ^double a ^double c]
+                        [id (<= a c)]) (range) (:acf acf) (:cis acf))
+                 (filter second)
+                 (ffirst)))}))
+

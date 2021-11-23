@@ -19,9 +19,19 @@
        m/double-double-array->seq
        (map vec)))
 
+
+(defn partial-derivative
+  ([model params] (partial-derivative model params 1.0e-6))
+  ([model ^clojure.lang.PersistentVector params ^double interval]
+   (let [^double lp (:lp (model params))]
+     (mapv (fn [^long id]
+             (let [new-params (assoc params id (+ ^double (.nth params id) interval))]
+               (/ (- ^double (:lp (model new-params)) lp) interval)))
+           (range (count params))))))
+
 (defn multi?
   [d]
-  (or (str/starts-with? (name d) "multi-")
+  (or (str/starts-with? (name d) "multi")
       (= d :dirichlet)))
 
 (comment

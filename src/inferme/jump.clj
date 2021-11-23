@@ -9,7 +9,10 @@
 (set! *unchecked-math* :warn-on-boxed)
 (m/use-primitive-operators)
 
-(defn- regular-sampler [d] (fn ^double [] (r/sample d)))
+(defn- regular-sampler
+  [d]
+  (fn ^double [] (r/sample d)))
+
 (defn- bactrian-sampler
   [d ^double m]
   (let [s (- 1.0 (* m m))]
