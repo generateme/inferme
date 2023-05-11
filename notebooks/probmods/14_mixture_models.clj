@@ -91,7 +91,7 @@
                             (let [mus (cat-to-mean (obs-to-cat name))]
                               [(observe1 (distr :normal {:mu (:xmean mus) :sd 0.01}) x)
                                (observe1 (distr :normal {:mu (:ymean mus) :sd 0.01}) y)])) observed-data)
-                  (fn [] (cat-to-mean (obs-to-cat :new-obs))))))
+                  (fn [] (assoc (cat-to-mean (obs-to-cat :new-obs)) :cat-mixture cat-mixture)))))
 
 (def post (infer :metropolis-hastings predictives-model {:max-iters 1e7
                                                          :burn 0
@@ -216,9 +216,9 @@
 
 (plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals [0.2 0.3 0.1 0.4]) 0)))
 
-((def probs (sample (distr :dirichlet {:alpha [1 1 1 1]})))
+(def probs (sample (distr :dirichlet {:alpha [1 1 1 1]})))
 
- plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals probs) 0)))
+(plot/frequencies (repeatedly 5000 #(my-sample-discrete (residuals probs) 0)))
 
 ;;
 (def beta11 (distr :beta {:alpha 1.0 :beta 1.0}))

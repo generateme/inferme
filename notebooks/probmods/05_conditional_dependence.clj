@@ -213,7 +213,7 @@
 ;; => 1.1387891133759487
 
 (defmodel reflectance-model
-  [reflectance (distr :normal {:mu 1 :sd 1})
+  [reflectance (:normal {:mu 1 :sd 1})
    illumination (:normal {:mu 3 :sd 1})]
   (let [luminance (* reflectance illumination)]
     (model-result [(observe1 (distr :normal {:mu luminance :sd 1}) 3)

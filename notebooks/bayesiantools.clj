@@ -1,7 +1,9 @@
 ;; https://cran.r-project.org/web/packages/BayesianTools/vignettes/BayesianTools.html
 (ns bayesiantools
   (:require [inferme.core :as im]
-            [inferme.plot :as plot]))
+            [inferme.plot :as plot]
+            [fastmath.stats :as stats]
+            [fastmath.core :as m]))
 
 (def first-distr (im/distr :multi-normal {:means [0 0 0]}))
 
@@ -15,31 +17,33 @@
 (:acceptance-ratio res)
 (:out-of-prior res)
 
-(plot/histogram (im/trace res :a 0))
-(plot/histogram (im/trace res :a 1))
-(plot/histogram (im/trace res :a 2))
+(first (:accepted res))
 
-(plot/lag (im/trace res :a 0))
-(plot/lag (im/trace res :a 1))
-(plot/lag (im/trace res :a 2))
+(plot/histogram (im/trace res :m 0))
+(plot/histogram (im/trace res :m 1))
+(plot/histogram (im/trace res :m 2))
 
-(im/stats res :a 0)
-;; => {:min -3.5870747474350546,
-;;     :mean -0.0033675373196662924,
-;;     :stddev 0.9812328804140042,
-;;     :mode 0.5292439577624617,
+(plot/lag (im/trace res :m 0))
+(plot/lag (im/trace res :m 1))
+(plot/lag (im/trace res :m 2))
+
+(im/stats res :m 0)
+;; => {:min -3.6105580733391083,
+;;     :hdi-94% (-1.8996343984885335 1.8403603582276202),
+;;     :mean -0.025526553402092002,
+;;     :stddev 1.0040920773337505,
+;;     :mode -0.3292465983982864,
 ;;     :size 10000,
-;;     :median -0.0036849060302567016,
-;;     :max 3.6209208398761703,
+;;     :median -0.039145436189661986,
+;;     :max 3.6954980813482363,
 ;;     :percentiles
-;;     {2.5 -1.9336907614319434,
-;;      97.5 1.9300035117187384,
-;;      1 -2.287981618624529,
-;;      95 1.6264787850699494,
-;;      99 2.309394292964303,
-;;      :Q1 -0.6661517268978946,
-;;      :Q3 0.6409158252972529,
-;;      :median -0.0036849060302567016,
-;;      5 -1.6137641340630937},
-;;     :lag 5}
-
+;;     {2.5 -1.963038131901796,
+;;      97.5 1.9347321618898725,
+;;      1 -2.315409939161508,
+;;      95 1.6593596817486653,
+;;      99 2.3388714974629914,
+;;      :Q1 -0.7026926905027296,
+;;      :Q3 0.6643359957425151,
+;;      :median -0.039145436189661986,
+;;      5 -1.6640965993135448},
+;;     :lag nil}

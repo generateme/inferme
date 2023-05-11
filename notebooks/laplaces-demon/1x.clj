@@ -42,7 +42,7 @@
    beta1 (multi :normal K- {:mu 0.0 :sd (m/sqrt 100.0)})
    beta2 (multi :normal K- {:mu 0.0 :sd (m/sqrt 100.0)})
    beta3 (multi :normal K- {:mu 0.0 :sd (m/sqrt 100.0)})
-   delta (multi :normal K {:mu zeta :sd (max 0.0 (double tau))})
+   delta (multi :normal K {:mu zeta :sd (max 1.0e-6 (double tau))})
    sigma (:half-cauchy {:scale 25})]
   (let [mplied (.add (.multiply ^Array2DRowRealMatrix XA
                                 (Array2DRowRealMatrix. (m/seq->double-double-array [beta1 beta2 beta3])))

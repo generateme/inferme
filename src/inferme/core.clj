@@ -415,66 +415,66 @@
 
            (recur (inc iter) new-accepted (+ accepted-cnt inner-accepted) curr-mr)))))))
 
-(def data (repeatedly 1000 #(r/grand 2 0.2)))
+#_(def data (repeatedly 1000 #(r/grand 2 0.2)))
 
-(defmodel tmodel
-  [mu (:normal {:sd 10})
-   sd (:uniform-real {:lower 0.0001})]
-  (model-result [(observe (distr :normal {:mu mu :sd sd}) data)]))
+#_(defmodel tmodel
+    [mu (:normal {:sd 10})
+     sd (:uniform-real {:lower 0.0001})]
+    (model-result [(observe (distr :normal {:mu mu :sd sd}) data)]))
 
-(defn partial-derivative
-  ([model params] (partial-derivative model params 1.0e-6))
-  ([model ^clojure.lang.PersistentVector params ^double interval]
-   (let [^double lp (:lp (model params))]
-     #_     (println {:params params :lp lp})
-     (mapv (fn [^long id]
-             (let [new-params (assoc params id (+ ^double (.nth params id) interval))]
-               #_      (println {:new-params new-params :lp (:lp (model new-params))
-                                 :diff (- ^double (:lp (model new-params)) lp)})
-               (/ (- ^double (:lp (model new-params)) lp) interval)))
-           (range (count params))))))
+#_(defn partial-derivative
+    ([model params] (partial-derivative model params 1.0e-6))
+    ([model ^clojure.lang.PersistentVector params ^double interval]
+     (let [^double lp (:lp (model params))]
+       #_     (println {:params params :lp lp})
+       (mapv (fn [^long id]
+               (let [new-params (assoc params id (+ ^double (.nth params id) interval))]
+                 #_      (println {:new-params new-params :lp (:lp (model new-params))
+                                   :diff (- ^double (:lp (model new-params)) lp)})
+                 (/ (- ^double (:lp (model new-params)) lp) interval)))
+             (range (count params))))))
 
-(let [model tmodel
-      m (:model model)
-      steps nil
-      step-scale nil
-      kernel (jump/regular-kernel (r/distribution :normal))
-      [step-vals step-fns] (kernel model steps step-scale)
-      ^ModelResultFinal init-mr (initial-point-calc model [1.0 0.2]  10)
-      Mo0 init-mr
-      parm (.params init-mr)
-      epsilon 1.0e-3
-      gr0 (partial-derivative (:model tmodel) parm)
-      mr init-mr
-      prop parm
-      momentum0 (mapv (fn [k v] (k v)) step-fns [0.0 0.0])
-      kinetic0 (* 0.5 (v/dot momentum0 momentum0))
-      momentum1 (v/add momentum0 (v/mult gr0 (* 0.5 epsilon)))
-      Mo01 Mo0
-      prop (v/add prop (v/mult momentum1 epsilon))
-      ^ModelResultFinal Mo1 (m prop)
-      gr1 (partial-derivative (:model tmodel) (.params Mo1))
-      momentum1 (v/sub (v/add momentum1 (v/mult gr1 (* 0.5 epsilon))))
-      kinetic1 (* 0.5 (v/dot momentum1 momentum1))
-      H0 (+ kinetic0 (- (.lp Mo0)))
-      H1 (+ kinetic1 (- (.lp Mo1)))
-      delta (- H1 H0)
-      alpha (min 1.0 (m/exp (- delta)))]
-  [momentum0 momentum1 gr0 gr1 (.params init-mr) (.params Mo1) kinetic0 kinetic1 alpha])
-
-
-(call tmodel [0.0 0.01])
-
-(def res (infer :metropolis-hastings tmodel {:steps [0.01 0.01]}))
-
-(:acceptance-ratio res)
-(:steps res)
-
-(plot/histogram (trace res :sd))
-(plot/histogram (trace res :mu))
+#_(let [model tmodel
+        m (:model model)
+        steps nil
+        step-scale nil
+        kernel (jump/regular-kernel (r/distribution :normal))
+        [step-vals step-fns] (kernel model steps step-scale)
+        ^ModelResultFinal init-mr (initial-point-calc model [1.0 0.2]  10)
+        Mo0 init-mr
+        parm (.params init-mr)
+        epsilon 1.0e-3
+        gr0 (partial-derivative (:model tmodel) parm)
+        mr init-mr
+        prop parm
+        momentum0 (mapv (fn [k v] (k v)) step-fns [0.0 0.0])
+        kinetic0 (* 0.5 (v/dot momentum0 momentum0))
+        momentum1 (v/add momentum0 (v/mult gr0 (* 0.5 epsilon)))
+        Mo01 Mo0
+        prop (v/add prop (v/mult momentum1 epsilon))
+        ^ModelResultFinal Mo1 (m prop)
+        gr1 (partial-derivative (:model tmodel) (.params Mo1))
+        momentum1 (v/sub (v/add momentum1 (v/mult gr1 (* 0.5 epsilon))))
+        kinetic1 (* 0.5 (v/dot momentum1 momentum1))
+        H0 (+ kinetic0 (- (.lp Mo0)))
+        H1 (+ kinetic1 (- (.lp Mo1)))
+        delta (- H1 H0)
+        alpha (min 1.0 (m/exp (- delta)))]
+    [momentum0 momentum1 gr0 gr1 (.params init-mr) (.params Mo1) kinetic0 kinetic1 alpha])
 
 
-(call tmodel)
+#_(call tmodel [0.0 0.01])
+
+;; (def res (infer :metropolis-hastings tmodel {:steps [0.01 0.01]}))
+
+;; (:acceptance-ratio res)
+;; (:steps res)
+
+;; (plot/histogram (trace res :sd))
+;; (plot/histogram (trace res :mu))
+
+
+;; (call tmodel)
 
 ;;
 
@@ -675,14 +675,14 @@
   ([inferred]
    (trace inferred :model-result))
   ([inferred selector]
-   (map selector (:accepted inferred)))
+   (map #(get % selector) (:accepted inferred)))
   ([inferred selector pos]
-   (map #(nth (selector %) pos) (:accepted inferred))))
+   (map #(nth (get % selector) pos) (:accepted inferred))))
 
 (defn traces
   [inferred & r]
   (map (apply juxt (map #(fn [v]
-                           (v %)) r)) (:accepted inferred)))
+                           (get v %)) r)) (:accepted inferred)))
 
 ;; stats
 
@@ -693,7 +693,8 @@
         p (stats/percentiles t [1.0 2.5 5.0
                                 25.0 50.0 75.0
                                 95.0 97.5 99.0])]
-    {:size (alength t)
+    {:hdi-94% (butlast (stats/hpdi-extent t 0.94))
+     :size (alength t)
      :mean (stats/mean t)
      :stddev (stats/stddev t)
      :mode (stats/mode t)
@@ -706,4 +707,3 @@
                         [id (<= a c)]) (range) (:acf acf) (:cis acf))
                  (filter second)
                  (ffirst)))}))
-

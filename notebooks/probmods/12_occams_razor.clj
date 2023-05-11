@@ -88,7 +88,7 @@
 (def results (infer :metropolis-hastings model {:samples 100000}))
 
 (plot/histogram (trace results :prior))
-(plot/histogram (trace results :weight))
+(plot/frequencies (trace results :weight))
 (plot/frequencies (trace results :fair))
 
 (defn post-model
@@ -130,7 +130,7 @@
 (:acceptance-ratio results)
 
 (plot/histogram (trace results :prior))
-(plot/histogram (trace results :weight))
+(plot/frequencies (trace results :weight))
 (plot/histogram (trace results :unfair-weight))
 (plot/frequencies (trace results :fair))
 

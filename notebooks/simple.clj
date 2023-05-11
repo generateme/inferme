@@ -39,6 +39,8 @@
 
 (plot/histogram (trace res :mu))
 
+(plot/histogram (m/rank (trace res :mu)))
+
 ;; Let's find optimal step size for given model
 
 (defn find-step
@@ -79,4 +81,14 @@
 (plot/lag (trace res :mu))
 
 (plot/histogram (trace res :mu))
+(plot/histogram (m/rank (trace res :mu)))
 
+
+;; bad samples, jump to big:
+
+(def res (infer :metropolis-hastings daslu-example {:steps [12.5]
+                                                  :samples 2000
+                                                  :max-iters 1e7}))
+(plot/lag (trace res :mu))
+(plot/histogram (trace res :mu))
+(plot/histogram (m/rank (trace res :mu)))

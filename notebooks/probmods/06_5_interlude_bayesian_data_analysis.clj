@@ -435,8 +435,8 @@
 (plot/histogram (trace posterior :sigma))
 
 (def model-data-df (map (fn [[k d]]
-                          (let [m (stats/mean (trace posterior k))]
-                            [m d])) tow-means))
+                        (let [m (stats/mean (trace posterior k))]
+                          [m d])) tow-means))
 
 (plot/scatter model-data-df)
 
