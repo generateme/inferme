@@ -80,3 +80,4 @@
   ([distr m] (independent-kernel distr m))
   ([distr] (independent-kernel distr 0.8)))
 
+(m/unuse-primitive-operators)

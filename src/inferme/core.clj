@@ -700,10 +700,12 @@
      :mode (stats/mode t)
      :median (p 4)
      :percentiles (zipmap [1 2.5 5 :Q1 :median :Q3 95 97.5 99] p)
-     :min (smile.math.MathEx/min t)
-     :max (smile.math.MathEx/max t)
+     :min (stats/minimum t)
+     :max (stats/maximum t)
      :lag (let [acf (stats/acf-ci t 50)]
             (->> (map (fn [id ^double a ^double c]
                         [id (<= a c)]) (range) (:acf acf) (:cis acf))
                  (filter second)
                  (ffirst)))}))
+
+(m/unuse-primitive-operators)

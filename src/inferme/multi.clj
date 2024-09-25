@@ -23,7 +23,7 @@
     (reify
       prot/DistributionProto
       (pdf [d v] (m/exp (prot/lpdf d v)))
-      (lpdf [_ v] (reduce m/fast+ (map #(prot/lpdf %1 %2) distrs v)))
+      (lpdf [_ v] (reduce m/+ (map #(prot/lpdf %1 %2) distrs v)))
       (probability [d v] (m/exp (prot/lpdf d v)))
       (sample [_] (mapv prot/sample distrs))
       (dimensions [_] dims)

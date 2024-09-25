@@ -36,7 +36,7 @@
 
 (comment
   (def covar [[0.018583700 -0.002682908]
-              [-0.002682908  0.0006236064]])
+            [-0.002682908  0.0006236064]])
 
   (def chol (cholesky covar))
 
@@ -44,3 +44,5 @@
 
   (mapv #(v/dot % nn) chol)
   )
+
+(m/unuse-primitive-operators)

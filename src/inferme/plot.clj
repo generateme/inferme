@@ -123,8 +123,10 @@
 (defn bar
   [d]
   (-> (plot/xy-chart {:width 500 :height 500}
-                     (b/series [:grid]
-                               [:stack-vertical [:bar d]])
-                     (b/add-axes :bottom)
-                     (b/add-axes :left))
+          (b/series [:grid]
+                    [:stack-vertical [:bar d]])
+        (b/add-axes :bottom)
+        (b/add-axes :left))
       (plot/show)))
+
+(m/unuse-primitive-operators)
